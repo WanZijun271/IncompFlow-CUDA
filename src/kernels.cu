@@ -6,6 +6,111 @@
 
 using namespace std;
 
+__global__ void initUfKernel(scalar *u, scalar *uf) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
+    int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
+    int k = blockIdx.z * blockDim.z + threadIdx.z + 1;
+
+    if (dim == 2 && i < nx && j < ny-1) {
+        int id_c = i + j * (nx + 1);
+        int id_W = i - 1 + j * nx;
+        int id_E = i + j * nx;
+        uf[id_c] = (u[id_W] + u[id_E]) / scalar(2.0);
+    } else if (dim == 3 && i < nx && j < ny-1 && k < nz-1) {
+        int id_c = i + j * (nx + 1) + k * (nx + 1) * ny;
+        int id_W = i - 1 + j * nx + k * nx * ny;
+        int id_E = i + j * nx + k * nx * ny;
+        uf[id_c] = (u[id_W] + u[id_E]) / scalar(2.0);
+    }
+}
+
+__global__ void initVfKernel(scalar *v, scalar *vf) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
+    int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
+    int k = blockIdx.z * blockDim.z + threadIdx.z + 1;
+
+    if (dim == 2 && i < nx-1 && j < ny) {
+        int id_c = j + i * (ny + 1);
+        int id_S = j - 1 + i * ny;
+        int id_N = j + i * ny;
+        vf[id_c] = (v[id_S] + v[id_N]) / scalar(2.0);
+    } else if (dim == 3 && i < nx-1 && j < ny && k < nz-1) {
+        int id_c = j + k * (ny + 1) + i * (ny + 1) * nz;
+        int id_S = j - 1 + k * ny + i * ny * nz;
+        int id_N = j + k * ny + i * ny * nz;
+        vf[id_c] = (v[id_S] + v[id_N]) / scalar(2.0);
+    }
+}
+
+__global__ void initWfKernel(scalar *w, scalar *wf) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
+    int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
+    int k = blockIdx.z * blockDim.z + threadIdx.z + 1;
+
+    if (dim == 3 && i < nx-1 && j < ny-1 && k < nz) {
+        int id_c = k + i * (nz + 1) + j * (nz + 1) * nx;
+        int id_B = k - 1 + i * nz + j * nz * nx;
+        int id_T = k + i * nz + j * nz * nx;
+        wf[id_c] = (w[id_B] + w[id_T]) / scalar(2.0);
+    }
+}
+
+void initVelOnFace(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uf_dev, scalar *vf_dev, scalar *wf_dev) {
+
+    cudaStream_t stream1, stream2, stream3;
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    if (dim == 3) {
+        cudaStreamCreate(&stream3);
+    }
+
+    dim3 threadsPerBlock;
+    dim3 numBlocks;
+    if (dim == 2) {
+        threadsPerBlock.x = 32;
+        threadsPerBlock.y = 32;
+        threadsPerBlock.z = 1;
+    } else if (dim == 3) {
+        threadsPerBlock.x = 16;
+        threadsPerBlock.y = 8;
+        threadsPerBlock.z = 8;
+    }
+
+    numBlocks.x = (nx - 1 + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny - 2 + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz - 2 + threadsPerBlock.z - 1) / threadsPerBlock.z;
+    numBlocks.z = max(1, numBlocks.z);
+    initUfKernel<<<numBlocks, threadsPerBlock, 0, stream1>>>(u_dev, uf_dev);
+
+    numBlocks.x = (nx - 2 + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny - 1 + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz - 2 + threadsPerBlock.z - 1) / threadsPerBlock.z;
+    numBlocks.z = max(1, numBlocks.z);
+    initVfKernel<<<numBlocks, threadsPerBlock, 0, stream2>>>(v_dev, vf_dev);
+
+    if (dim == 3) {
+        numBlocks.x = (nx - 2 + threadsPerBlock.x - 1) / threadsPerBlock.x;
+        numBlocks.y = (ny - 2 + threadsPerBlock.y - 1) / threadsPerBlock.y;
+        numBlocks.z = (nz - 1 + threadsPerBlock.z - 1) / threadsPerBlock.z;
+        initWfKernel<<<numBlocks, threadsPerBlock, 0, stream3>>>(w_dev, wf_dev);
+    }
+
+    cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(stream2);
+    if (dim == 3) {
+        cudaStreamSynchronize(stream3);
+    }
+
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    if (dim == 3) {
+        cudaStreamDestroy(stream3);
+    }
+}
+
 __global__ void pointJacobiIterateKernel(scalar *tempField, scalar* tempField0, scalar *coef, scalar *norm) {
 
     extern __shared__ scalar sharedNorm[];
@@ -97,7 +202,7 @@ __global__ void pointJacobiIterateKernel(scalar *tempField, scalar* tempField0, 
     }
 }
 
-void pointJacobiIterate(vector<scalar>& tempField, const vector<scalar>& coef) {
+void pointJacobiIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
 
     size_t tempFieldSize = tempField.size() * sizeof(scalar);
     size_t coefSize = coef.size() * sizeof(scalar);
@@ -109,7 +214,7 @@ void pointJacobiIterate(vector<scalar>& tempField, const vector<scalar>& coef) {
     cudaMalloc(&devNorm, sizeof(scalar));
 
     cudaMemcpy(devTempField, tempField.data(), tempFieldSize, cudaMemcpyHostToDevice);
-    cudaMemset(devTempField0, 0, tempFieldSize);
+    cudaMemset(devTempField0, 0.0, tempFieldSize);
     cudaMemcpy(devCoef, coef.data(), coefSize, cudaMemcpyHostToDevice);
 
     dim3 threadsPerBlock;
@@ -258,7 +363,7 @@ __global__ void GaussSeidelIterateKernel(scalar *tempField, scalar *coef, scalar
     }
 }
 
-void GaussSeidelIterate(vector<scalar>& tempField, const vector<scalar>& coef) {
+void GaussSeidelIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
 
     size_t tempFieldSize = tempField.size() * sizeof(scalar);
     size_t coefSize = coef.size() * sizeof(scalar);

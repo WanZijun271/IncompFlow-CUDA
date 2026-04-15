@@ -21,6 +21,26 @@ constexpr scalar specificHeatCapacity = 1.0;                                    
 constexpr scalar density = 1.0;                                                                // density 密度
 constexpr scalar thermalDiffusivity = thermalConductivity / specificHeatCapacity / density;    // thermal diffusivity 热扩散率
 
+struct velBCs{
+    static constexpr int type[6] = { // 0 for the "Dirichlet" type; 1 for the "Neumann" type; 2 for "outlet"
+        0,    // east
+        0,    // west
+        0,    // north
+        0,    // south
+        0,    // top
+        0     // bottom
+    };
+
+    static constexpr scalar val[6][3] = {
+        {0.0, 0.0, 0.0},    // east
+        {0.0, 0.0, 0.0},    // west
+        {0.0, 0.0, 0.0},    // north 
+        {0.0, 0.0, 0.0},    // south
+        {0.0, 0.0, 0.0},    // top
+        {0.0, 0.0, 0.0}     // bottom
+    };
+};
+
 struct TempBCs{
     static constexpr int type[6] = { // 0 for the "Dirichlet" type; 1 for the "Neumann" type
         1,    // east

@@ -9,27 +9,80 @@
 
 using namespace std;
 
-Solver::Solver() {
-    _tempField.assign(nx * ny * nz, 0);     // initialize temperature field
+Solver::Solver(scalar u, scalar v, scalar w, scalar p, scalar temp) {
+
+    _u.assign(nx * ny * nz, u);
+    _v.assign(nx * ny * nz, v);
+    _w.assign(nx * ny * nz, w);
+
+    _p.assign(nx * ny * nz, p);
+
+    _temp.assign(nx * ny * nz, temp);     // initialize temperature field
 
     // initialize coefficient
-    _coef.assign(nx * ny * nz * (2 + 2 * dim), 0);
-    calcCoef();    // calculate coefficient
+    // _coef.assign(nx * ny * nz * (2 + 2 * dim), 0);
+    // calcCoef();    // calculate coefficient
 }
 
-void Solver::initTempField(scalar temp) {
-    _tempField.assign(nx * ny * nz, temp);
+void Solver::solve() {
+
+    size_t fieldSize = nx * ny * nz * sizeof(scalar);
+    size_t coefSize = nx * ny * nz * (2+2*dim) * sizeof(scalar);
+
+    scalar *u_dev, *v_dev, *w_dev, *p_dev, *temp_dev;
+    cudaMalloc(&u_dev, fieldSize);
+    cudaMalloc(&v_dev, fieldSize);
+    cudaMalloc(&w_dev, fieldSize);
+    cudaMalloc(&p_dev, fieldSize);
+    cudaMalloc(&temp_dev, fieldSize);
+
+    cudaMemcpy(u_dev, _u.data(), fieldSize, cudaMemcpyHostToDevice);
+    cudaMemcpy(v_dev, _v.data(), fieldSize, cudaMemcpyHostToDevice);
+    cudaMemcpy(w_dev, _w.data(), fieldSize, cudaMemcpyHostToDevice);
+    cudaMemcpy(p_dev, _p.data(), fieldSize, cudaMemcpyHostToDevice);
+    cudaMemcpy(temp_dev, _temp.data(), fieldSize, cudaMemcpyHostToDevice);
+
+    size_t ufSize = (nx+1) * ny * nz * sizeof(scalar);
+    size_t vfSize = nx * (ny+1) * nz * sizeof(scalar);
+    size_t wfSize = nx * ny * (nz+1) * sizeof(scalar);
+
+    scalar *uf_dev, *vf_dev, *wf_dev;
+    cudaMalloc(&uf_dev, ufSize);
+    cudaMalloc(&vf_dev, vfSize);
+    cudaMalloc(&wf_dev, wfSize);
+
+    cudaMemset(uf_dev, 0.0, ufSize);
+    cudaMemset(vf_dev, 0.0, vfSize);
+    cudaMemset(wf_dev, 0.0, wfSize);
+
+    for (int it = 0; it < niter; ++it) {
+
+        if (it == 0) {
+            initVelOnFace(u_dev, v_dev, w_dev, uf_dev, vf_dev, wf_dev);
+        }
+
+    }
+
+    cudaFree(u_dev);
+    cudaFree(v_dev);
+    cudaFree(w_dev);
+    cudaFree(p_dev);
+    cudaFree(temp_dev);
+
+    cudaFree(uf_dev);
+    cudaFree(vf_dev);
+    cudaFree(wf_dev);
 }
 
-void Solver::pointJacobiSolver() {
-    pointJacobiIterate(_tempField, _coef);
+/* void Solver::pointJacobiSolver() {
+    pointJacobiIterate(_temp, _coef);
 }
+ */
+/* void Solver::GaussSeidelSolver() {
+    GaussSeidelIterate(_temp, _coef);
+} */
 
-void Solver::GaussSeidelSolver() {
-    GaussSeidelIterate(_tempField, _coef);
-}
-
-void Solver::writeVTK(const string& filename) const {
+void Solver::writeVTK(const string &filename) const {
 
     filesystem::path filepath = filesystem::path("output") / filesystem::path(filename);
     filesystem::path parent = filepath.parent_path();
@@ -76,7 +129,7 @@ void Solver::writeVTK(const string& filename) const {
 
     // write temperature data
     file << "temperature 1 " << ncell << " float" << endl;
-    for (const scalar& temp : _tempField) {
+    for (const scalar& temp : _temp) {
         file << temp << " ";
     }
     file << endl;
@@ -84,7 +137,7 @@ void Solver::writeVTK(const string& filename) const {
     file.close();
 }
 
-void Solver::calcCoef() {
+/* void Solver::calcCoef() {
 
     scalar areaE = dy * dz;
     scalar areaW = dy * dz;
@@ -192,4 +245,4 @@ void Solver::calcCoef() {
             }
         }
     }
-}
+} */
