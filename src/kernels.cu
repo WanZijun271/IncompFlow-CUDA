@@ -89,7 +89,7 @@ void initFaceVel(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uf_dev, sc
     }
 }
 
-__global__ void applyUfBCsKernel(scalar *uf, scalar *u, int i, int type, scalar val) {
+__global__ void applyBCsToUfKernel(scalar *uf, scalar *u, int i, int type, scalar val) {
 
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
@@ -110,7 +110,7 @@ __global__ void applyUfBCsKernel(scalar *uf, scalar *u, int i, int type, scalar 
     }
 }
 
-__global__ void applyVfBCsKernel(scalar *vf, scalar *v, int j, int type, scalar val) {
+__global__ void applyBCsToVfKernel(scalar *vf, scalar *v, int j, int type, scalar val) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
@@ -131,7 +131,7 @@ __global__ void applyVfBCsKernel(scalar *vf, scalar *v, int j, int type, scalar 
     }
 }
 
-__global__ void applyWfBCsKernel(scalar *wf, scalar *w, int k, int type, scalar val) {
+__global__ void applyBCsToWfKernel(scalar *wf, scalar *w, int k, int type, scalar val) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -152,7 +152,7 @@ __global__ void applyWfBCsKernel(scalar *wf, scalar *w, int k, int type, scalar 
     }
 }
 
-void applyFaceVelBCs(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *u_dev, scalar *v_dev, scalar *w_dev) {
+void applyBCsToFaceVel(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *u_dev, scalar *v_dev, scalar *w_dev) {
 
     cudaStream_t stream[2*dim];
     for (int i = 0; i < 2*dim; ++i) {
@@ -170,8 +170,8 @@ void applyFaceVelBCs(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *u_d
     numBlocks.x = 1;
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    applyUfBCsKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uf_dev, u_dev, 0, velBCs::type[west], velBCs::val[west][0]);
-    applyUfBCsKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(uf_dev, u_dev, nx, velBCs::type[east], velBCs::val[east][0]);
+    applyBCsToUfKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uf_dev, u_dev, 0, velBCs::type[west], velBCs::val[west][0]);
+    applyBCsToUfKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(uf_dev, u_dev, nx, velBCs::type[east], velBCs::val[east][0]);
 
     if (dim == 2) {
         threadsPerBlock = dim3(1024, 1, 1);
@@ -181,16 +181,16 @@ void applyFaceVelBCs(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *u_d
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = 1;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    applyVfBCsKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(vf_dev, v_dev, 0, velBCs::type[south], velBCs::val[south][1]);
-    applyVfBCsKernel<<<numBlocks, threadsPerBlock, 0, stream[3]>>>(vf_dev, v_dev, ny, velBCs::type[north], velBCs::val[north][1]);
+    applyBCsToVfKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(vf_dev, v_dev, 0, velBCs::type[south], velBCs::val[south][1]);
+    applyBCsToVfKernel<<<numBlocks, threadsPerBlock, 0, stream[3]>>>(vf_dev, v_dev, ny, velBCs::type[north], velBCs::val[north][1]);
 
     if (dim == 3) {
         threadsPerBlock = dim3(32, 32, 1);
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
         numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
         numBlocks.z = 1;
-        applyWfBCsKernel<<<numBlocks, threadsPerBlock, 0, stream[4]>>>(wf_dev, w_dev, 0, velBCs::type[bottom], velBCs::val[bottom][2]);
-        applyWfBCsKernel<<<numBlocks, threadsPerBlock, 0, stream[5]>>>(wf_dev, w_dev, nz, velBCs::type[top], velBCs::val[top][2]);
+        applyBCsToWfKernel<<<numBlocks, threadsPerBlock, 0, stream[4]>>>(wf_dev, w_dev, 0, velBCs::type[bottom], velBCs::val[bottom][2]);
+        applyBCsToWfKernel<<<numBlocks, threadsPerBlock, 0, stream[5]>>>(wf_dev, w_dev, nz, velBCs::type[top], velBCs::val[top][2]);
     }
 
     for (int i = 0; i < 2*dim; ++i) {
@@ -273,14 +273,13 @@ __global__ void calcMomXSrcTermKernel(scalar *uSrcTerm, scalar *p, int typeW, in
         if (i == 0) {
             if (typeW == 0 || typeW == 1) { // "wall" or "inlet"
                 uSrcTerm[id_C] = 0.5 * (p[id_C] * areaW - p[id_E] * areaE);
-            } else if (typeW == 2) {
+            } else if (typeW == 2) { // "outlet"
                 uSrcTerm[id_C] = 0.5 * (p[id_C] + p[id_E]) * areaE;
             }
-            
-        } else if (i = nx - 1) {
+        } else if (i == nx - 1) {
             if (typeE == 0 || typeE == 1) { // "wall" or "inlet"
                 uSrcTerm[id_C] = 0.5 * (p[id_W] * areaW - p[id_C] * areaE);
-            } else if (typeE == 2) {
+            } else if (typeE == 2) { // "outlet"
                 uSrcTerm[id_C] = 0.5 * (p[id_W] + p[id_C]) * areaW;
             }
         } else {
@@ -289,7 +288,70 @@ __global__ void calcMomXSrcTermKernel(scalar *uSrcTerm, scalar *p, int typeW, in
     }
 }
 
+__global__ void calcMomYSrcTermKernel(scalar *vSrcTerm, scalar *p, int typeS, int typeN) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (i < nx && j < ny && k < nz) {
+        int id_C = i + nx * (j + ny * k);
+        int id_S = i + nx * (j-1 + ny * k);
+        int id_N = i + nx * (j+1 + ny * k);
+
+        if (j == 0) {
+            if (typeS == 0 || typeS == 1) { // "wall" or "inlet"
+                vSrcTerm[id_C] = 0.5 * (p[id_C] * areaS - p[id_N] * areaN);
+            } else if (typeS == 2) { // "outlet"
+                vSrcTerm[id_C] = 0.5 * (p[id_C] + p[id_N]) * areaN;
+            }
+        } else if (j == ny - 1) {
+            if (typeN == 0 || typeN == 1) { // "wall" or "inlet"
+                vSrcTerm[id_C] = 0.5 * (p[id_S] * areaS - p[id_C] * areaN);
+            } else if (typeN == 2) { // "outlet"
+                vSrcTerm[id_C] = 0.5 * (p[id_S] + p[id_C]) * areaS;
+            }
+        } else {
+            vSrcTerm[id_C] = 0.5 * (p[id_S] * areaS - p[id_N] * areaN);
+        }
+    }
+}
+
+__global__ void calcMomZSrcTermKernel(scalar *wSrcTerm, scalar *p, int typeB, int typeT) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (i < nx && j < ny && k < nz) {
+        int id_C = i + nx * (j + ny * k);
+        int id_B = i + nx * (j + ny * k-1);
+        int id_T = i + nx * (j + ny * k+1);
+
+        if (k == 0) {
+            if (typeB == 0 || typeB == 1) { // "wall" or "inlet"
+                wSrcTerm[id_C] = 0.5 * (p[id_C] * areaB - p[id_T] * areaT);
+            } else if (typeB == 2) { // "outlet"
+                wSrcTerm[id_C] = 0.5 * (p[id_C] + p[id_T]) * areaT;
+            }
+        } else if (k == nz - 1) {
+            if (typeT == 0 || typeT == 1) { // "wall" or "inlet"
+                wSrcTerm[id_C] = 0.5 * (p[id_B] * areaB - p[id_C] * areaT);
+            } else if (typeT == 2) { // "outlet"
+                wSrcTerm[id_C] = 0.5 * (p[id_B] + p[id_C]) * areaB;
+            }
+        } else {
+            wSrcTerm[id_C] = 0.5 * (p[id_B] * areaB - p[id_T] * areaT);
+        }
+    }
+}
+
 void calcMomSrcTerm(scalar *uSrcTerm_dev, scalar *vSrcTerm_dev, scalar *wSrcTerm_dev, scalar *p_dev) {
+
+    cudaStream_t stream[dim];
+    for (int i = 0; i < dim; ++i) {
+        cudaStreamCreate(&stream[i]);
+    }
 
     dim3 threadsPerBlock;
     dim3 numBlocks; 
@@ -303,117 +365,226 @@ void calcMomSrcTerm(scalar *uSrcTerm_dev, scalar *vSrcTerm_dev, scalar *wSrcTerm
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    calcMomXSrcTermKernel<<<numBlocks, threadsPerBlock>>>(uSrcTerm_dev, p_dev, velBCs::type[west], velBCs::type[east]);
+    calcMomXSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uSrcTerm_dev, p_dev, velBCs::type[west], velBCs::type[east]);
+    calcMomYSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(vSrcTerm_dev, p_dev, velBCs::type[south], velBCs::type[north]);
+    if (dim == 3) {
+        calcMomZSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(wSrcTerm_dev, p_dev, velBCs::type[bottom], velBCs::type[top]);
+    }
 
-    cudaDeviceSynchronize();
+    for (int i = 0; i < dim; ++i) {
+        cudaStreamSynchronize(stream[i]);
+    }
+
+    for (int i = 0; i < dim; ++i) {
+        cudaStreamDestroy(stream[i]);
+    }
 }
 
-/* 
-__global__ void pointJacobiIterateKernel(scalar *tempField, scalar* tempField0, scalar *coef, scalar *norm) {
+__global__ void applyBCsToMomEqKernel(scalar *uCoef, scalar *vCoef, scalar *wCoef, scalar *uSrcTerm, scalar *vSrcTerm
+    , scalar *wSrcTerm, int location, int type, scalar uBC, scalar vBC, scalar wBC) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (((location == east  || location == west  ) && i < ny && j < nz) ||
+        ((location == north || location == south ) && i < nx && j < nz) ||
+        ((location == top   || location == bottom) && i < nx && j < ny)) {
+
+        int id_aC, id_aNB, id_b;
+        if (location == east) {
+            id_aC  = nx-1 + nx * (i + ny * (j + aC));
+            id_aNB = nx-1 + nx * (i + ny * (j + aE));
+            id_b   = nx-1 + nx * (i + ny * j);
+        } else if (location == west) {
+            id_aC  = 0 + nx * (i + ny * (j + aC));
+            id_aNB = 0 + nx * (i + ny * (j + aW));
+            id_b   = 0 + nx * (i + ny * j);
+        } else if (location == north) {
+            id_aC  = i + nx * (ny-1 + ny * (j + aC));
+            id_aNB = i + nx * (ny-1 + ny * (j + aN));
+            id_b   = i + nx * (ny-1 + ny * j);
+        } else if (location == south) {
+            id_aC  = i + nx * (0 + ny * (j + aC));
+            id_aNB = i + nx * (0 + ny * (j + aS));
+            id_b   = i + nx * (0 + ny * j);
+        } else if (location == top) {
+            id_aC  = i + nx * (j + ny * (nz-1 + aC));
+            id_aNB = i + nx * (j + ny * (nz-1 + aT));
+            id_b   = i + nx * (j + ny * (nz-1));
+        } else if (location == bottom) {
+            id_aC  = i + nx * (j + ny * (0 + aC));
+            id_aNB = i + nx * (j + ny * (0 + aB));
+            id_b   = i + nx * (j + ny * 0);
+        }
+
+        if (type == 0 || type == 1) { // "wall" or "inlet"
+            uCoef[id_aC] -= uCoef[id_aNB];
+            uSrcTerm[id_b] -= 2 * uCoef[id_aNB] * uBC;
+            uCoef[id_aNB] = 0;
+
+            vCoef[id_aC] -= vCoef[id_aNB];
+            vSrcTerm[id_b] -= 2 * vCoef[id_aNB] * vBC;
+            vCoef[id_aNB] = 0;
+
+            if (dim == 3) {
+                wCoef[id_aC] -= wCoef[id_aNB];
+                wSrcTerm[id_b] -= 2 * wCoef[id_aNB] * wBC;
+                wCoef[id_aNB] = 0;
+            }
+        } else if (type == 2) { // "outlet"
+            uCoef[id_aC] += uCoef[id_aNB];
+            uCoef[id_aNB] = 0;
+
+            vCoef[id_aC] += vCoef[id_aNB];
+            vCoef[id_aNB] = 0;
+
+            if (dim == 3) {
+                wCoef[id_aC] += wCoef[id_aNB];
+                wCoef[id_aNB] = 0;
+            }
+        }
+    }
+}
+
+void applyBCsToMomEq(scalar *uCoef_dev, scalar *uSrcTerm_dev, scalar *vCoef_dev, scalar *vSrcTerm_dev, scalar *wCoef_dev
+    , scalar *wSrcTerm_dev) {
+
+    cudaStream_t stream[2*dim];
+    for (int i = 0; i < 2*dim; ++i) {
+        cudaStreamCreate(&stream[i]);
+    }
+
+    dim3 threadsPerBlock;
+    dim3 numBlocks;
+
+    if (dim == 2) {
+        threadsPerBlock = dim3(1024, 1, 1);
+    } else if (dim == 3) {
+        threadsPerBlock = dim3(32, 32, 1);
+    }
+
+    numBlocks.x = (ny + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
+        , wSrcTerm_dev, east, velBCs::type[east], velBCs::val[east][0], velBCs::val[east][1], velBCs::val[east][2]);
+    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
+        , wSrcTerm_dev, west, velBCs::type[west], velBCs::val[west][0], velBCs::val[west][1], velBCs::val[west][2]);
+
+    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
+        , wSrcTerm_dev, north, velBCs::type[north], velBCs::val[north][0], velBCs::val[north][1], velBCs::val[north][2]);
+    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[3]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
+        , wSrcTerm_dev, south, velBCs::type[south], velBCs::val[south][0], velBCs::val[south][1], velBCs::val[south][2]);
+
+    if (dim == 3) {
+        numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+        numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
+        numBlocks.z = 1;
+        applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[4]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
+            , wSrcTerm_dev, top, velBCs::type[top], velBCs::val[top][0], velBCs::val[top][1], velBCs::val[top][2]);
+        applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[5]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
+            , wSrcTerm_dev, bottom, velBCs::type[bottom], velBCs::val[bottom][0], velBCs::val[bottom][1], velBCs::val[bottom][2]);
+    }
+
+    for (int i = 0; i < 2*dim; ++i) {
+        cudaStreamSynchronize(stream[i]);
+    }
+
+    for (int i = 0; i < 2*dim; ++i) {
+        cudaStreamDestroy(stream[i]);
+    }
+}
+
+__global__ void pointJacobiIterateKernel(scalar *field, scalar* field0, scalar *coef, scalar *srcTerm, scalar *norm) {
 
     extern __shared__ scalar sharedNorm[];
 
-    int threadId = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;
+    int tid = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int idP = i + j * nx + k * nx * ny;
-        scalar tempP = tempField0[idP];
-        // tE
-        scalar tempE = 0.0;
+        int id_C = i + nx * (j + ny * k);
+        scalar phi_C = field0[id_C];
+        // east
+        scalar phi_E = 0;
         if ( i != nx - 1 ) {
-            int idE = (i+1) + j * nx + k * nx * ny;
-            tempE = tempField0[idE];
+            int id_E = i+1 + nx * (j + ny * k);
+            phi_E = field0[id_E];
         }
-        // tW
-        scalar tempW = 0.0;
+        // west
+        scalar phi_W = 0;
         if ( i != 0 ) {
-            int idW = (i-1) + j * nx + k * nx * ny;
-            tempW = tempField0[idW];
+            int id_W = i-1 + nx * (j + ny * k);
+            phi_W = field0[id_W];
         }
-        // tN
-        scalar tempN = 0.0;
+        // north
+        scalar phi_N = 0;
         if ( j != ny - 1 ) {
-            int idN = i + (j+1) * nx + k * nx * ny;
-            tempN = tempField0[idN];
+            int id_N = i + nx * (j+1 + ny * k);
+            phi_N = field0[id_N];
         }
-        // tS
-        scalar tempS = 0.0;
+        // south
+        scalar phi_S = 0;
         if ( j != 0 ) {
-            int idS = i + (j-1) * nx + k * nx * ny;
-            tempS = tempField0[idS];
+            int id_S = i + nx * (j-1 + ny * k);
+            phi_S = field0[id_S];
         }
-        // tT
-        scalar tempT = 0.0;
+        // top
+        scalar phi_T = 0;
         if ( k != nz - 1 ) {
-            int idT = i + j * nx + (k+1) * nx * ny;
-            tempT = tempField0[idT];
+            int id_T = i + nx * (j + ny * (k+1));
+            phi_T = field0[id_T];
         }
-        // tB
-        scalar tempB = 0.0;
+        // bottom
+        scalar phi_B = 0;
         if ( k != 0 ) {
-            int idB = i + j * nx + (k-1) * nx * ny;
-            tempB = tempField0[idB];
+            int id_B = i + nx * (j + ny * (k-1));
+            phi_B = field0[id_B];
         }
         
-        scalar newTemp = tempP;
-        if (dim == 2) {
-            int id = i * 6 + j * nx * 6;
-            newTemp = coef[id+id_b]
-                - coef[id+aE] * tempE
-                - coef[id+aW] * tempW
-                - coef[id+aN] * tempN
-                - coef[id+aS] * tempS;
-            newTemp /= coef[id+aC];
-        } else if (dim == 3) {
-            int id = i * 8 + j * nx * 8 + k * nx * ny * 8;
-            newTemp = coef[id+id_b]
-                - coef[id+aE] * tempE
-                - coef[id+aW] * tempW
-                - coef[id+aN] * tempN
-                - coef[id+aS] * tempS
-                - coef[id+aT] * tempT
-                - coef[id+aB] * tempB;
-            newTemp /= coef[id+aC];
+        scalar newPhi = srcTerm[id_C]
+            - coef[i+nx*(j+ny*(k+aE))] * phi_E
+            - coef[i+nx*(j+ny*(k+aW))] * phi_W
+            - coef[i+nx*(j+ny*(k+aN))] * phi_N
+            - coef[i+nx*(j+ny*(k+aS))] * phi_S;
+        if (dim == 3) {
+            newPhi -= coef[i+nx*(j+ny*(k+aT))] * phi_T + coef[i+nx*(j+ny*(k+aB))] * phi_B;
         }
+        newPhi /= coef[i+nx*(j+ny*(k+aC))];
 
-        scalar dT = relax * (newTemp - tempP);
+        scalar dPhi = relax * (newPhi - phi_C);
 
-        tempField[idP] = tempP + dT;
+        field[id_C] = phi_C + dPhi;
 
-        sharedNorm[threadId] = dT*dT;
+        sharedNorm[tid] = dPhi*dPhi;
         __syncthreads();
 
         int stride = blockDim.x * blockDim.y * blockDim.z;
         for (int s = stride / 2; s > 0; s >>= 1) {
-            if (threadId < s) {
-                sharedNorm[threadId] += sharedNorm[threadId + s];
+            if (tid < s) {
+                sharedNorm[tid] += sharedNorm[tid + s];
             }
             __syncthreads();
         }
 
-        if (threadId == 0) {
+        if (tid == 0) {
             atomicAdd(norm, sharedNorm[0]);
         }
     }
 }
 
-void pointJacobiIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
+void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, scalar *srcTerm_dev) {
 
-    size_t tempFieldSize = tempField.size() * sizeof(scalar);
-    size_t coefSize = coef.size() * sizeof(scalar);
+    scalar *field0_dev, *norm_dev;
+    cudaMalloc(&field0_dev, fieldSize);
+    cudaMalloc(&norm_dev, sizeof(scalar));
 
-    scalar *devTempField, *devTempField0, *devCoef, *devNorm;
-    cudaMalloc(&devTempField, tempFieldSize);
-    cudaMalloc(&devTempField0, tempFieldSize);
-    cudaMalloc(&devCoef, coefSize);
-    cudaMalloc(&devNorm, sizeof(scalar));
-
-    cudaMemcpy(devTempField, tempField.data(), tempFieldSize, cudaMemcpyHostToDevice);
-    cudaMemset(devTempField0, 0.0, tempFieldSize);
-    cudaMemcpy(devCoef, coef.data(), coefSize, cudaMemcpyHostToDevice);
+    cudaMemset(field0_dev, 0.0, fieldSize);
 
     dim3 threadsPerBlock;
     dim3 numBlocks;
@@ -435,18 +606,18 @@ void pointJacobiIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
 
     scalar maxNorm = -1e20;
 
-    for (int it = 0; it < niter; ++it) {
+    for (int it = 0; it < numInnerIter; ++it) {
         
-        scalar *tmp = devTempField;
-        devTempField = devTempField0;
-        devTempField0 = tmp;
+        scalar *tmp = field_dev;
+        field_dev = field0_dev;
+        field0_dev = tmp;
 
         scalar norm = 0.0;
-        cudaMemcpy(devNorm, &norm, sizeof(scalar), cudaMemcpyHostToDevice);
+        cudaMemcpy(norm_dev, &norm, sizeof(scalar), cudaMemcpyHostToDevice);
 
-        pointJacobiIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(devTempField, devTempField0, devCoef, devNorm);
+        pointJacobiIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(field_dev, field0_dev, coef_dev, srcTerm_dev, norm_dev);
         
-        cudaMemcpy(&norm, devNorm, sizeof(scalar), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&norm, norm_dev, sizeof(scalar), cudaMemcpyDeviceToHost);
 
         norm = sqrt(norm / (nx * ny * nz));
 
@@ -458,117 +629,94 @@ void pointJacobiIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
         }
     }
 
-    cudaMemcpy(tempField.data(), devTempField, tempFieldSize, cudaMemcpyDeviceToHost);
-
-    cudaFree(devTempField);
-    cudaFree(devTempField0);
-    cudaFree(devCoef);
-    cudaFree(devNorm);
+    cudaFree(field0_dev);
+    cudaFree(norm_dev);
 }
 
-__global__ void GaussSeidelIterateKernel(scalar *tempField, scalar *coef, scalar *norm) {
+__global__ void GaussSeidelIterateKernel(scalar *field, scalar *coef, scalar *srcTerm, scalar *norm) {
 
     extern __shared__ scalar sharedNorm[];
 
-    int threadId = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;
+    int tid = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int idP = i + j * nx + k * nx * ny;
-        scalar tempP = tempField[idP];
-        // tE
-        scalar tempE = 0.0;
+        int id_C = i + nx * (j + ny * k);
+        scalar phi_C = field[id_C];
+        // east
+        scalar phi_E = 0;
         if ( i != nx - 1 ) {
-            int idE = (i+1) + j * nx + k * nx * ny;
-            tempE = tempField[idE];
+            int id_E = i+1 + nx * (j + ny * k);
+            phi_E = field[id_E];
         }
-        // tW
-        scalar tempW = 0.0;
+        // west
+        scalar phi_W = 0;
         if ( i != 0 ) {
-            int idW = (i-1) + j * nx + k * nx * ny;
-            tempW = tempField[idW];
+            int id_W = i-1 + nx * (j + ny * k);
+            phi_W = field[id_W];
         }
-        // tN
-        scalar tempN = 0.0;
+        // north
+        scalar phi_N = 0;
         if ( j != ny - 1 ) {
-            int idN = i + (j+1) * nx + k * nx * ny;
-            tempN = tempField[idN];
+            int id_N = i + nx * (j+1 + ny * k);
+            phi_N = field[id_N];
         }
-        // tS
-        scalar tempS = 0.0;
+        // south
+        scalar phi_S = 0;
         if ( j != 0 ) {
-            int idS = i + (j-1) * nx + k * nx * ny;
-            tempS = tempField[idS];
+            int id_S = i + nx * (j-1 + ny * k);
+            phi_S = field[id_S];
         }
-        // tT
-        scalar tempT = 0.0;
+        // top
+        scalar phi_T = 0;
         if ( k != nz - 1 ) {
-            int idT = i + j * nx + (k+1) * nx * ny;
-            tempT = tempField[idT];
+            int id_T = i + nx * (j + ny * (k+1));
+            phi_T = field[id_T];
         }
-        // tB
-        scalar tempB = 0.0;
+        // bottom
+        scalar phi_B = 0;
         if ( k != 0 ) {
-            int idB = i + j * nx + (k-1) * nx * ny;
-            tempB = tempField[idB];
+            int id_B = i + nx * (j + ny * (k-1));
+            phi_B = field[id_B];
         }
         
-        scalar newTemp = tempP;
-        if (dim == 2) {
-            int id = i * 6 + j * nx * 6;
-            newTemp = coef[id+id_b]
-                - coef[id+aE] * tempE
-                - coef[id+aW] * tempW
-                - coef[id+aN] * tempN
-                - coef[id+aS] * tempS;
-            newTemp /= coef[id+aC];
-        } else if (dim == 3) {
-            int id = i * 8 + j * nx * 8 + k * nx * ny * 8;
-            newTemp = coef[id+id_b]
-                - coef[id+aE] * tempE
-                - coef[id+aW] * tempW
-                - coef[id+aN] * tempN
-                - coef[id+aS] * tempS
-                - coef[id+aT] * tempT
-                - coef[id+aB] * tempB;
-            newTemp /= coef[id+aC];
+        scalar newPhi = srcTerm[id_C]
+            - coef[i+nx*(j+ny*(k+aE))] * phi_E
+            - coef[i+nx*(j+ny*(k+aW))] * phi_W
+            - coef[i+nx*(j+ny*(k+aN))] * phi_N
+            - coef[i+nx*(j+ny*(k+aS))] * phi_S;
+        if (dim == 3) {
+            newPhi -= coef[i+nx*(j+ny*(k+aT))] * phi_T + coef[i+nx*(j+ny*(k+aB))] * phi_B;
         }
+        newPhi /= coef[i+nx*(j+ny*(k+aC))];
 
-        scalar dT = relax * (newTemp - tempP);
+        scalar dPhi = relax * (newPhi - phi_C);
 
-        tempField[idP] = tempP + dT;
+        field[id_C] = phi_C + dPhi;
 
-        sharedNorm[threadId] = dT*dT;
+        sharedNorm[tid] = dPhi*dPhi;
         __syncthreads();
 
         int stride = blockDim.x * blockDim.y * blockDim.z;
         for (int s = stride / 2; s > 0; s >>= 1) {
-            if (threadId < s) {
-                sharedNorm[threadId] += sharedNorm[threadId + s];
+            if (tid < s) {
+                sharedNorm[tid] += sharedNorm[tid + s];
             }
             __syncthreads();
         }
 
-        if (threadId == 0) {
+        if (tid == 0) {
             atomicAdd(norm, sharedNorm[0]);
         }
     }
 }
 
-void GaussSeidelIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
+void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev) {
 
-    size_t tempFieldSize = tempField.size() * sizeof(scalar);
-    size_t coefSize = coef.size() * sizeof(scalar);
-
-    scalar *devTempField, *devCoef, *devNorm;
-    cudaMalloc(&devTempField, tempFieldSize);
-    cudaMalloc(&devCoef, coefSize);
-    cudaMalloc(&devNorm, sizeof(scalar));
-
-    cudaMemcpy(devTempField, tempField.data(), tempFieldSize, cudaMemcpyHostToDevice);
-    cudaMemcpy(devCoef, coef.data(), coefSize, cudaMemcpyHostToDevice);
+    scalar *norm_dev;
+    cudaMalloc(&norm_dev, sizeof(scalar));
 
     dim3 threadsPerBlock;
     dim3 numBlocks;
@@ -590,14 +738,14 @@ void GaussSeidelIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
 
     scalar maxNorm = -1e20;
 
-    for (int it = 0; it < niter; ++it) {
+    for (int it = 0; it < numInnerIter; ++it) {
 
         scalar norm = 0.0;
-        cudaMemcpy(devNorm, &norm, sizeof(scalar), cudaMemcpyHostToDevice);
+        cudaMemcpy(norm_dev, &norm, sizeof(scalar), cudaMemcpyHostToDevice);
 
-        GaussSeidelIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(devTempField, devCoef, devNorm);
+        GaussSeidelIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(field_dev, coef_dev, srcTerm_dev, norm_dev);
         
-        cudaMemcpy(&norm, devNorm, sizeof(scalar), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&norm, norm_dev, sizeof(scalar), cudaMemcpyDeviceToHost);
 
         norm = sqrt(norm / (nx * ny * nz));
 
@@ -609,11 +757,5 @@ void GaussSeidelIterate(vector<scalar> &tempField, const vector<scalar> &coef) {
         }
     }
 
-    cudaMemcpy(tempField.data(), devTempField, tempFieldSize, cudaMemcpyDeviceToHost);
-
-    cudaFree(devTempField);
-    cudaFree(devCoef);
-    cudaFree(devNorm);
+    cudaFree(norm_dev);
 }
-
- */

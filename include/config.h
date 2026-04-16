@@ -5,8 +5,8 @@
 
 constexpr int dim = 2;
 
-constexpr int nx = 2048;
-constexpr int ny = 2048;
+constexpr int nx = 256;
+constexpr int ny = 256;
 constexpr int nz = 1;
 
 constexpr scalar xmin = 0.0;
@@ -62,7 +62,8 @@ struct TempBCs{
     };
 };
 
-constexpr int niter = 1000;      // iteration times 迭代次数
+constexpr int numOuterIter = 100;      // iteration times 迭代次数
+constexpr int numInnerIter = 10;
 constexpr scalar relax = 0.75;     // 松弛因子
 constexpr scalar tol = 1e-6;       // tolerance of relative residual
 
