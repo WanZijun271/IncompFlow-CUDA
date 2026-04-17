@@ -27,4 +27,8 @@ constexpr scalar areaX = dy * dz;
 constexpr scalar areaY = dz * dx;
 constexpr scalar areaZ = dx * dy;
 
+constexpr int xDir = 0;
+constexpr int yDir = 1;
+constexpr int zDir = 2;
+
 #endif
