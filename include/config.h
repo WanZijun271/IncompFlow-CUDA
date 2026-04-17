@@ -5,8 +5,8 @@
 
 constexpr int dim = 2;
 
-constexpr int nx = 64;
-constexpr int ny = 64;
+constexpr int nx = 128;
+constexpr int ny = 128;
 constexpr int nz = 1;
 
 constexpr scalar xmin = 0.0;
@@ -24,8 +24,8 @@ constexpr scalar thermalDiffusivity = thermalConductivity / specificHeatCapacity
 
 struct velBCs{
     static constexpr int type[6] = { // 0 for the "wall" type; 1 for the "inlet" type; 2 for the "outlet" type
-        1,    // east
-        2,    // west
+        2,    // east
+        1,    // west
         0,    // north
         0,    // south
         0,    // top
@@ -33,8 +33,8 @@ struct velBCs{
     };
 
     static constexpr scalar val[6][3] = {
-        {1.0, 0.0, 0.0},    // east
-        {0.0, 0.0, 0.0},    // west
+        {0.0, 0.0, 0.0},    // east
+        {1.0, 0.0, 0.0},    // west
         {0.0, 0.0, 0.0},    // north 
         {0.0, 0.0, 0.0},    // south
         {0.0, 0.0, 0.0},    // top
@@ -62,9 +62,9 @@ struct TempBCs{
     };
 };
 
-constexpr int numOuterIter = 1000;      // iteration times 迭代次数
-constexpr int numInnerIter = 1000;
-constexpr scalar relax = 0.75;     // 松弛因子
+constexpr int numOuterIter = 10;      // iteration times 迭代次数
+constexpr int numInnerIter = 10;
+constexpr scalar relax = 0.3;     // 松弛因子
 constexpr scalar innerTol = 1e-2;       // tolerance of relative residual
 constexpr scalar outerTol = 1e-4;
 

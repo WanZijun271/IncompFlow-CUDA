@@ -13,9 +13,9 @@ __global__ void initUfKernel(scalar *u, scalar *uf) {
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int id_c  = i + (nx+1) * (j + ny * k);
-        int id_W = (i-1) + nx * (j + ny * k);
-        int id_E = i + nx * (j + ny * k);
+        int id_c = i     + (nx+1) * (j + ny * k);
+        int id_W = (i-1) + nx     * (j + ny * k);
+        int id_E = i     + nx     * (j + ny * k);
         uf[id_c] = (u[id_W] + u[id_E]) / 2;
     }
 }
@@ -27,9 +27,9 @@ __global__ void initVfKernel(scalar *v, scalar *vf) {
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int id_c = i + nx * (j + (ny+1) * k);
-        int id_S = i + nx * (j-1 + ny * k);
-        int id_N = i + nx * (j + ny * k);
+        int id_c = i + nx * (j   + (ny+1) * k);
+        int id_S = i + nx * (j-1 + ny     * k);
+        int id_N = i + nx * (j   + ny     * k);
         vf[id_c] = (v[id_S] + v[id_N]) / 2;
     }
 }
@@ -41,9 +41,9 @@ __global__ void initWfKernel(scalar *w, scalar *wf) {
     int k = blockIdx.z * blockDim.z + threadIdx.z + 1;
 
     if (i < nx && j < ny && k < nz) {
-        int id_c = i + nx * (j + ny * k);
+        int id_c = i + nx * (j + ny * k    );
         int id_B = i + nx * (j + ny * (k-1));
-        int id_T = i + nx * (j + ny * k);
+        int id_T = i + nx * (j + ny * k    );
         wf[id_c] = (w[id_B] + w[id_T]) / 2;
     }
 }
