@@ -102,6 +102,9 @@ void Solver::solve() {
         if (dim == 3) {
             pointJacobiIterate(w_dev, fieldSize, wCoef_dev, wSrcTerm_dev);
         }
+
+        RhieChowInterpolate(uf_dev, vf_dev, wf_dev, u_dev, v_dev, w_dev, uCoef_dev, vCoef_dev, wCoef_dev, p_dev);
+        applyBCsToFaceVel(uf_dev, vf_dev, wf_dev, u_dev, v_dev, w_dev);
     }
 
     cudaMemcpy(_u.data(), u_dev, fieldSize, cudaMemcpyDeviceToHost);

@@ -23,11 +23,8 @@ constexpr scalar dx = (xmax - xmin) / (scalar)nx;
 constexpr scalar dy = (ymax - ymin) / (scalar)ny;
 constexpr scalar dz = (zmax - zmin) / (scalar)nz;
 
-constexpr scalar areaE = dy * dz;
-constexpr scalar areaW = dy * dz;
-constexpr scalar areaN = dz * dx;
-constexpr scalar areaS = dz * dx;
-constexpr scalar areaT = dx * dy;
-constexpr scalar areaB = dx * dy;
+constexpr scalar areaX = dy * dz;
+constexpr scalar areaY = dz * dx;
+constexpr scalar areaZ = dx * dy;
 
 #endif

@@ -19,4 +19,7 @@ void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, s
 
 void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev);
 
+void RhieChowInterpolate(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *u_dev, scalar *v_dev, scalar *w_dev
+    , scalar *uCoef_dev, scalar *vCoef_dev, scalar *wCoef_dev, scalar *p_dev);
+
 #endif
