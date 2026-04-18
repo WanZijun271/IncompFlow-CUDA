@@ -5,21 +5,21 @@
 
 constexpr int dim = 2;
 
-constexpr int nx = 128;
-constexpr int ny = 128;
+constexpr int nx = 64;
+constexpr int ny = 32;
 constexpr int nz = 1;
 
-constexpr scalar xmin = 0.0;
-constexpr scalar xmax = 1.0;
-constexpr scalar ymin = 0.0;
-constexpr scalar ymax = 1.0;
+constexpr scalar xmin = -0.0625;
+constexpr scalar xmax = 0.0625;
+constexpr scalar ymin = -0.0125;
+constexpr scalar ymax = 0.0125;
 constexpr scalar zmin = 0.0;
 constexpr scalar zmax = 1.0;
 
 constexpr scalar thermalConductivity = 0.598;                                                   // thermal conductivity 热导率
 constexpr scalar specificHeatCapacity = 4186.0;                                                   // specific heat capacity 比热容
-constexpr scalar density = 998.21;                                                                // density 密度 
-constexpr scalar dynamicViscosity = 1.002e-3;
+constexpr scalar density = 1;                                                                // density 密度 
+constexpr scalar dynamicViscosity = 0.01;
 constexpr scalar thermalDiffusivity = thermalConductivity / specificHeatCapacity / density;    // thermal diffusivity 热扩散率
 
 struct velBCs{
@@ -33,12 +33,12 @@ struct velBCs{
     };
 
     static constexpr scalar val[6][3] = {
-        {0.0, 0.0, 0.0},    // east
-        {1.0, 0.0, 0.0},    // west
-        {0.0, 0.0, 0.0},    // north 
-        {0.0, 0.0, 0.0},    // south
-        {0.0, 0.0, 0.0},    // top
-        {0.0, 0.0, 0.0}     // bottom
+        {0, 0, 0},    // east
+        {1, 0, 0},    // west
+        {0, 0, 0},    // north 
+        {0, 0, 0},    // south
+        {0, 0, 0},    // top
+        {0, 0, 0}     // bottom
     };
 };
 
@@ -62,10 +62,23 @@ struct TempBCs{
     };
 };
 
-constexpr int numOuterIter = 10;      // iteration times 迭代次数
-constexpr int numInnerIter = 10;
-constexpr scalar relax = 0.3;     // 松弛因子
-constexpr scalar innerTol = 1e-2;       // tolerance of relative residual
-constexpr scalar outerTol = 1e-4;
+constexpr int numOuterIter = 800;      // iteration times 迭代次数
+
+constexpr int nIter_u = 5;
+constexpr int nIter_v = 5;
+constexpr int nIter_w = 5;
+constexpr int nIter_p = 200;
+
+constexpr scalar relax_u = 0.75;     // 松弛因子
+constexpr scalar relax_v = 0.75;
+constexpr scalar relax_w = 0.75;
+constexpr scalar relax_p = 0.25;
+
+constexpr scalar tol_u = 1e-4;
+constexpr scalar tol_v = 1e-4;
+constexpr scalar tol_w = 1e-4;
+constexpr scalar tol_p = 1e-6;
+
+constexpr scalar outerTol = 1e-6; // tolerance of relative residual
 
 #endif

@@ -3,6 +3,8 @@
 #include "constants.h"
 #include <cmath>
 #include <algorithm>
+#include <iostream>
+#include <cstdio>
 
 using namespace std;
 
@@ -214,11 +216,11 @@ __global__ void calcMomLinkCoefKernel(scalar *coef, scalar *uf, scalar *vf, scal
         scalar vn = vf[i   + nx     * (j+1 + (ny+1) * k)];
         scalar vs = vf[i   + nx     * (j   + (ny+1) * k)];
 
-        int id_aE = i + nx * (j + ny * (k + aE));
-        int id_aW = i + nx * (j + ny * (k + aW));
-        int id_aN = i + nx * (j + ny * (k + aN));
-        int id_aS = i + nx * (j + ny * (k + aS));
-        int id_aC = i + nx * (j + ny * (k + aC));
+        int id_aE = i + nx * (j + ny * (k + nz * aE));
+        int id_aW = i + nx * (j + ny * (k + nz * aW));
+        int id_aN = i + nx * (j + ny * (k + nz * aN));
+        int id_aS = i + nx * (j + ny * (k + nz * aS));
+        int id_aC = i + nx * (j + ny * (k + nz * aC));
 
         coef[id_aE] = (density * (ue  - abs(ue)) * areaX) / 2 - dynamicViscosity * areaX / dx;
         coef[id_aW] = (density * (-uw - abs(uw)) * areaX) / 2 - dynamicViscosity * areaX / dx;
@@ -259,7 +261,7 @@ void calcMomLinkCoef(scalar *coef_dev, scalar *uf_dev, scalar *vf_dev, scalar *w
     cudaDeviceSynchronize();
 }
 
-__global__ void calcMomXSrcTermKernel(scalar *uSrcTerm, scalar *p, int typeW, int typeE) {
+__global__ void calcMomSrcTermKernel(scalar *srcTerm, scalar *p, int dir, int typeL, int typeR) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -267,82 +269,42 @@ __global__ void calcMomXSrcTermKernel(scalar *uSrcTerm, scalar *p, int typeW, in
 
     if (i < nx && j < ny && k < nz) {
         int id_C = i   + nx * (j + ny * k);
-        int id_W = i-1 + nx * (j + ny * k);
-        int id_E = i+1 + nx * (j + ny * k);
-
-        if (i == 0) {
-            if (typeW == 0 || typeW == 1) { // "wall" or "inlet"
-                uSrcTerm[id_C] = 0.5 * (p[id_C] - p[id_E]) * areaX;
-            } else if (typeW == 2) { // "outlet"
-                uSrcTerm[id_C] = 0.5 * (p[id_C] + p[id_E]) * areaX;
-            }
-        } else if (i == nx - 1) {
-            if (typeE == 0 || typeE == 1) { // "wall" or "inlet"
-                uSrcTerm[id_C] = 0.5 * (p[id_W] - p[id_C]) * areaX;
-            } else if (typeE == 2) { // "outlet"
-                uSrcTerm[id_C] = 0.5 * (p[id_W] + p[id_C]) * areaX;
-            }
-        } else {
-            uSrcTerm[id_C] = 0.5 * (p[id_W] - p[id_E]) * areaX;
+        int id_L, id_R;
+        scalar area;
+        if (dir == xDir) {
+            id_L = i-1 + nx * (j + ny * k);
+            id_R = i+1 + nx * (j + ny * k);
+            area = areaX;
+        } else if (dir == yDir) {
+            id_L = i + nx * (j-1 + ny * k);
+            id_R = i + nx * (j+1 + ny * k);
+            area = areaY;
+        } else if (dir == zDir) {
+            id_L = i + nx * (j + ny * (k-1));
+            id_R = i + nx * (j + ny * (k+1));
+            area = areaZ;
         }
-    }
-}
 
-__global__ void calcMomYSrcTermKernel(scalar *vSrcTerm, scalar *p, int typeS, int typeN) {
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (i < nx && j < ny && k < nz) {
-        int id_C = i + nx * (j + ny * k);
-        int id_S = i + nx * (j-1 + ny * k);
-        int id_N = i + nx * (j+1 + ny * k);
-
-        if (j == 0) {
-            if (typeS == 0 || typeS == 1) { // "wall" or "inlet"
-                vSrcTerm[id_C] = 0.5 * (p[id_C] - p[id_N]) * areaY;
-            } else if (typeS == 2) { // "outlet"
-                vSrcTerm[id_C] = 0.5 * (p[id_C] + p[id_N]) * areaY;
+        scalar p_L, p_R;
+        if ((dir == xDir && i == 0) || (dir == yDir && j == 0) || (dir == zDir && k == 0)) {
+            if (typeL == 0 || typeL == 1) { // "wall" or "inlet"
+                p_L = p[id_C];
+            } else if (typeL == 2) { // "outlet"
+                p_L = 0;
             }
-        } else if (j == ny - 1) {
-            if (typeN == 0 || typeN == 1) { // "wall" or "inlet"
-                vSrcTerm[id_C] = 0.5 * (p[id_S] - p[id_C]) * areaY;
-            } else if (typeN == 2) { // "outlet"
-                vSrcTerm[id_C] = 0.5 * (p[id_S] + p[id_C]) * areaY;
+            p_R = p[id_R];
+        } else if ((dir == xDir && i == nx-1) || (dir == yDir && j == ny-1) || (dir == zDir && k == nz-1)) {
+            if (typeR == 0 || typeR == 1) { // "wall" or "inlet"
+                p_R = p[id_C];
+            } else if (typeR == 2) { // "outlet"
+                p_R = 0;
             }
+            p_L = p[id_L];
         } else {
-            vSrcTerm[id_C] = 0.5 * (p[id_S] - p[id_N]) * areaY;
+            p_L = p[id_L];
+            p_R = p[id_R];
         }
-    }
-}
-
-__global__ void calcMomZSrcTermKernel(scalar *wSrcTerm, scalar *p, int typeB, int typeT) {
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (i < nx && j < ny && k < nz) {
-        int id_C = i + nx * (j + ny * k);
-        int id_B = i + nx * (j + ny * k-1);
-        int id_T = i + nx * (j + ny * k+1);
-
-        if (k == 0) {
-            if (typeB == 0 || typeB == 1) { // "wall" or "inlet"
-                wSrcTerm[id_C] = 0.5 * (p[id_C] - p[id_T]) * areaZ;
-            } else if (typeB == 2) { // "outlet"
-                wSrcTerm[id_C] = 0.5 * (p[id_C] + p[id_T]) * areaZ;
-            }
-        } else if (k == nz - 1) {
-            if (typeT == 0 || typeT == 1) { // "wall" or "inlet"
-                wSrcTerm[id_C] = 0.5 * (p[id_B] - p[id_C]) * areaZ;
-            } else if (typeT == 2) { // "outlet"
-                wSrcTerm[id_C] = 0.5 * (p[id_B] + p[id_C]) * areaZ;
-            }
-        } else {
-            wSrcTerm[id_C] = 0.5 * (p[id_B] - p[id_T]) * areaZ;
-        }
+        srcTerm[id_C] = 0.5 * (p_L - p_R) * area;
     }
 }
 
@@ -365,10 +327,15 @@ void calcMomSrcTerm(scalar *uSrcTerm_dev, scalar *vSrcTerm_dev, scalar *wSrcTerm
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    calcMomXSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uSrcTerm_dev, p_dev, velBCs::type[west], velBCs::type[east]);
-    calcMomYSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(vSrcTerm_dev, p_dev, velBCs::type[south], velBCs::type[north]);
+    calcMomSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uSrcTerm_dev, p_dev, xDir, velBCs::type[west]
+        , velBCs::type[east]);
+
+    calcMomSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(vSrcTerm_dev, p_dev, yDir, velBCs::type[south]
+        , velBCs::type[north]);
+
     if (dim == 3) {
-        calcMomZSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(wSrcTerm_dev, p_dev, velBCs::type[bottom], velBCs::type[top]);
+        calcMomSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(wSrcTerm_dev, p_dev, zDir, velBCs::type[bottom]
+            , velBCs::type[top]);
     }
 
     for (int i = 0; i < dim; ++i) {
@@ -390,77 +357,67 @@ __global__ void applyBCsToMomEqKernel(scalar *uCoef, scalar *vCoef, scalar *wCoe
         ((location == north || location == south ) && i < nx && j < nz) ||
         ((location == top   || location == bottom) && i < nx && j < ny)) {
 
-        int id_aC, id_aNB, id_b;
+        int id_aC, id_aIn, id_aOut, id_b;
         if (location == east) {
-            id_aC  = nx-1 + nx * (i + ny * (j + aC));
-            id_aNB = nx-1 + nx * (i + ny * (j + aE));
-            id_b   = nx-1 + nx * (i + ny * j);
+            id_aC   = nx-1 + nx * (i + ny * (j + nz * aC));
+            id_aIn  = nx-1 + nx * (i + ny * (j + nz * aW));
+            id_aOut = nx-1 + nx * (i + ny * (j + nz * aE));
+            id_b    = nx-1 + nx * (i + ny * j);
         } else if (location == west) {
-            id_aC  = 0 + nx * (i + ny * (j + aC));
-            id_aNB = 0 + nx * (i + ny * (j + aW));
-            id_b   = 0 + nx * (i + ny * j);
+            id_aC   = 0 + nx * (i + ny * (j + nz * aC));
+            id_aIn  = 0 + nx * (i + ny * (j + nz * aE));
+            id_aOut = 0 + nx * (i + ny * (j + nz * aW));
+            id_b    = 0 + nx * (i + ny * j);
         } else if (location == north) {
-            id_aC  = i + nx * (ny-1 + ny * (j + aC));
-            id_aNB = i + nx * (ny-1 + ny * (j + aN));
-            id_b   = i + nx * (ny-1 + ny * j);
+            id_aC   = i + nx * (ny-1 + ny * (j + nz * aC));
+            id_aIn  = i + nx * (ny-1 + ny * (j + nz * aS));
+            id_aOut = i + nx * (ny-1 + ny * (j + nz * aN));
+            id_b    = i + nx * (ny-1 + ny * j);
         } else if (location == south) {
-            id_aC  = i + nx * (0 + ny * (j + aC));
-            id_aNB = i + nx * (0 + ny * (j + aS));
-            id_b   = i + nx * (0 + ny * j);
+            id_aC   = i + nx * (0 + ny * (j + nz * aC));
+            id_aIn  = i + nx * (0 + ny * (j + nz * aN));
+            id_aOut = i + nx * (0 + ny * (j + nz * aS));
+            id_b    = i + nx * (0 + ny * j);
         } else if (location == top) {
-            id_aC  = i + nx * (j + ny * (nz-1 + aC));
-            id_aNB = i + nx * (j + ny * (nz-1 + aT));
-            id_b   = i + nx * (j + ny * (nz-1));
+            id_aC   = i + nx * (j + ny * (nz-1 + nz * aC));
+            id_aIn  = i + nx * (i + ny * (nz-1 + nz * aB));
+            id_aOut = i + nx * (j + ny * (nz-1 + nz * aT));
+            id_b    = i + nx * (j + ny * (nz-1));
         } else if (location == bottom) {
-            id_aC  = i + nx * (j + ny * (0 + aC));
-            id_aNB = i + nx * (j + ny * (0 + aB));
-            id_b   = i + nx * (j + ny * 0);
+            id_aC   = i + nx * (j + ny * (0 + nz * aC));
+            id_aIn  = i + nx * (i + ny * (0 + nz * aT));
+            id_aOut = i + nx * (j + ny * (0 + nz * aB));
+            id_b    = i + nx * (j + ny * 0);
         }
 
-        if (type == 0) { // "wall"
-            uCoef[id_aC] -= uCoef[id_aNB];
-            if (location != east && location != west) {
-                uSrcTerm[id_b] -= 2 * uCoef[id_aNB] * uBC;
-            }
-            uCoef[id_aNB] = 0;
+        
+        if (type == 0 || type == 1) { // "wall" or "inlet"
+            uCoef[id_aC] -= 2 * uCoef[id_aOut];
+            uCoef[id_aIn] += uCoef[id_aOut] / 3;
+            uSrcTerm[id_b] -= 8/3 * uCoef[id_aOut] * uBC;
+            uCoef[id_aOut] = 0;
 
-            vCoef[id_aC] -= vCoef[id_aNB];
-            if (location != north && location != south) {
-                vSrcTerm[id_b] -= 2 * vCoef[id_aNB] * vBC;
-            }
-            vCoef[id_aNB] = 0;
-
-            if (dim == 3) {
-                wCoef[id_aC] -= wCoef[id_aNB];
-                if (location != top && location != bottom) {
-                    wSrcTerm[id_b] -= 2 * wCoef[id_aNB] * wBC;
-                }
-                wCoef[id_aNB] = 0;
-            }
-        } else if (type == 1) { // "inlet"
-            uCoef[id_aC] -= uCoef[id_aNB];
-            uSrcTerm[id_b] -= 2 * uCoef[id_aNB] * uBC;
-            uCoef[id_aNB] = 0;
-
-            vCoef[id_aC] -= vCoef[id_aNB];
-            vSrcTerm[id_b] -= 2 * vCoef[id_aNB] * vBC;
-            vCoef[id_aNB] = 0;
+            vCoef[id_aC] -= 2 * vCoef[id_aOut];
+            vCoef[id_aIn] += vCoef[id_aOut] / 3;
+            vSrcTerm[id_b] -= 8/3 * vCoef[id_aOut] * vBC;
+            vCoef[id_aOut] = 0;
 
             if (dim == 3) {
-                wCoef[id_aC] -= wCoef[id_aNB];
-                wSrcTerm[id_b] -= 2 * wCoef[id_aNB] * wBC;
-                wCoef[id_aNB] = 0;
+                wCoef[id_aC] -= 2 * wCoef[id_aOut];
+                wCoef[id_aIn] += wCoef[id_aOut] / 3;
+                wSrcTerm[id_b] -= 8/3 * wCoef[id_aOut] * wBC;
+                wCoef[id_aOut] = 0;
             }
         } else if (type == 2) { // "outlet"
-            uCoef[id_aC] += uCoef[id_aNB];
-            uCoef[id_aNB] = 0;
+            uCoef[id_aC] += uCoef[id_aOut];
+            uCoef[id_aOut] = 0;
 
-            vCoef[id_aC] += vCoef[id_aNB];
-            vCoef[id_aNB] = 0;
+            vCoef[id_aC] += vCoef[id_aOut];
+            vCoef[id_aOut] = 0;
 
             if (dim == 3) {
-                wCoef[id_aC] += wCoef[id_aNB];
-                wCoef[id_aNB] = 0;
+                wCoef[id_aC] += wCoef[id_aOut];
+                wCoef[id_aOut] = 0;
             }
         }
     }
@@ -518,7 +475,7 @@ void applyBCsToMomEq(scalar *uCoef_dev, scalar *uSrcTerm_dev, scalar *vCoef_dev,
     }
 }
 
-__global__ void pointJacobiIterateKernel(scalar *field, scalar* field0, scalar *coef, scalar *srcTerm, scalar *norm) {
+__global__ void pointJacobiIterateKernel(scalar *field, scalar* field0, scalar *coef, scalar *srcTerm, scalar *norm, scalar relax) {
 
     extern __shared__ scalar sharedNorm[];
 
@@ -568,14 +525,14 @@ __global__ void pointJacobiIterateKernel(scalar *field, scalar* field0, scalar *
         }
         
         scalar newPhi = srcTerm[id_C]
-            - coef[i+nx*(j+ny*(k+aE))] * phi_E
-            - coef[i+nx*(j+ny*(k+aW))] * phi_W
-            - coef[i+nx*(j+ny*(k+aN))] * phi_N
-            - coef[i+nx*(j+ny*(k+aS))] * phi_S;
+            - coef[i+nx*(j+ny*(k+nz*aE))] * phi_E
+            - coef[i+nx*(j+ny*(k+nz*aW))] * phi_W
+            - coef[i+nx*(j+ny*(k+nz*aN))] * phi_N
+            - coef[i+nx*(j+ny*(k+nz*aS))] * phi_S;
         if (dim == 3) {
-            newPhi -= coef[i+nx*(j+ny*(k+aT))] * phi_T + coef[i+nx*(j+ny*(k+aB))] * phi_B;
+            newPhi -= coef[i+nx*(j+ny*(k+nz*aT))] * phi_T + coef[i+nx*(j+ny*(k+aB))] * phi_B;
         }
-        newPhi /= coef[i+nx*(j+ny*(k+aC))];
+        newPhi /= coef[i+nx*(j+ny*(k+nz*aC))];
 
         scalar dPhi = relax * (newPhi - phi_C);
 
@@ -598,7 +555,8 @@ __global__ void pointJacobiIterateKernel(scalar *field, scalar* field0, scalar *
     }
 }
 
-void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, scalar *srcTerm_dev) {
+void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, scalar *srcTerm_dev, int nIter, scalar relax
+    , scalar tol) {
 
     scalar *field0_dev, *norm_dev;
     cudaMalloc(&field0_dev, fieldSize);
@@ -622,7 +580,7 @@ void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, s
 
     scalar maxNorm = -1e20;
 
-    for (int it = 0; it < numInnerIter; ++it) {
+    for (int it = 0; it < nIter; ++it) {
         
         scalar *tmp = field_dev;
         field_dev = field0_dev;
@@ -631,7 +589,10 @@ void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, s
         scalar norm = 0.0;
         cudaMemset(norm_dev, 0, sizeof(scalar));
 
-        pointJacobiIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(field_dev, field0_dev, coef_dev, srcTerm_dev, norm_dev);
+        pointJacobiIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(field_dev, field0_dev, coef_dev
+            , srcTerm_dev, norm_dev, relax);
+        
+        cudaDeviceSynchronize();
         
         cudaMemcpy(&norm, norm_dev, sizeof(scalar), cudaMemcpyDeviceToHost);
 
@@ -640,7 +601,7 @@ void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, s
         maxNorm = max(norm, maxNorm);
 
         scalar relNorm = norm / (maxNorm + 1e-20);    // relative residual
-        if (relNorm < innerTol) {
+        if (relNorm < tol) {
             break;
         }
     }
@@ -649,7 +610,7 @@ void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, s
     cudaFree(norm_dev);
 }
 
-__global__ void GaussSeidelIterateKernel(scalar *field, scalar *coef, scalar *srcTerm, scalar *norm) {
+__global__ void GaussSeidelIterateKernel(scalar *field, scalar *coef, scalar *srcTerm, scalar *norm, scalar relax) {
 
     extern __shared__ scalar sharedNorm[];
 
@@ -729,7 +690,7 @@ __global__ void GaussSeidelIterateKernel(scalar *field, scalar *coef, scalar *sr
     }
 }
 
-void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev) {
+void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev, int nIter, scalar relax, scalar tol) {
 
     scalar *norm_dev;
     cudaMalloc(&norm_dev, sizeof(scalar));
@@ -750,12 +711,15 @@ void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev
 
     scalar maxNorm = -1e20;
 
-    for (int it = 0; it < numInnerIter; ++it) {
+    for (int it = 0; it < nIter; ++it) {
 
         scalar norm = 0.0;
         cudaMemset(norm_dev, 0, sizeof(scalar));
 
-        GaussSeidelIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(field_dev, coef_dev, srcTerm_dev, norm_dev);
+        GaussSeidelIterateKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize>>>(field_dev, coef_dev, srcTerm_dev
+            , norm_dev, relax);
+        
+        cudaDeviceSynchronize();
         
         cudaMemcpy(&norm, norm_dev, sizeof(scalar), cudaMemcpyDeviceToHost);
 
@@ -764,7 +728,7 @@ void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev
         maxNorm = max(norm, maxNorm);
 
         scalar relNorm = norm / (maxNorm + 1e-20);    // relative residual
-        if (relNorm < innerTol) {
+        if (relNorm < tol) {
             break;
         }
     }
@@ -956,65 +920,42 @@ void RhieChowInterpolate(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar 
     }
 }
 
-__global__ void calcPresCorrLinkCoefKernel(scalar *pCorrCoef, scalar *uCoef, scalar *vCoef, scalar *wCoef, int typeE, int typeW
-    , int typeN, int typeS, int typeT, int typeB) {
+__global__ void calcPresCorrLinkCoefKernel(scalar *pCorrCoef, scalar *uCoef, scalar *vCoef, scalar *wCoef) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int id_aC = i+nx*(j+ny*(k+aC));
-        int id_aE = i+nx*(j+ny*(k+aE));
-        int id_aW = i+nx*(j+ny*(k+aW));
-        int id_aN = i+nx*(j+ny*(k+aN));
-        int id_aS = i+nx*(j+ny*(k+aS));
-        int id_aT = i+nx*(j+ny*(k+aT));
-        int id_aB = i+nx*(j+ny*(k+aB));
+        int id_aC = i+nx*(j+ny*(k+nz*aC));
+        int id_aE = i+nx*(j+ny*(k+nz*aE));
+        int id_aW = i+nx*(j+ny*(k+nz*aW));
+        int id_aN = i+nx*(j+ny*(k+nz*aN));
+        int id_aS = i+nx*(j+ny*(k+nz*aS));
+        int id_aT = i+nx*(j+ny*(k+nz*aT));
+        int id_aB = i+nx*(j+ny*(k+nz*aB));
 
         if (i < nx - 1) {
-            pCorrCoef[id_aE] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+aC))] + 1/uCoef[i+1+nx*(j+ny*(k+aC))]);
+            pCorrCoef[id_aE] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+nz*aC))] + 1/uCoef[i+1+nx*(j+ny*(k+nz*aC))]);
         }
         if (i > 0) {
-            pCorrCoef[id_aW] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+aC))] + 1/uCoef[i-1+nx*(j+ny*(k+aC))]);
+            pCorrCoef[id_aW] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+nz*aC))] + 1/uCoef[i-1+nx*(j+ny*(k+nz*aC))]);
         }
         if (j < ny -1) {
-            pCorrCoef[id_aN] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+aC))] + 1/vCoef[i+nx*(j+1+ny*(k+aC))]);
+            pCorrCoef[id_aN] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+nz*aC))] + 1/vCoef[i+nx*(j+1+ny*(k+nz*aC))]);
         }
         if (j > 0) {
-            pCorrCoef[id_aS] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+aC))] + 1/vCoef[i+nx*(j-1+ny*(k+aC))]);
+            pCorrCoef[id_aS] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+nz*aC))] + 1/vCoef[i+nx*(j-1+ny*(k+nz*aC))]);
         }
         pCorrCoef[id_aC] = -(pCorrCoef[id_aE] + pCorrCoef[id_aW] + pCorrCoef[id_aN] + pCorrCoef[id_aS]);
         if (dim == 3) {
             if (k < nz - 1) {
-                pCorrCoef[i+nx*(j+ny*(k+aT))] = -0.5 * density * areaZ * areaZ * (1/wCoef[i+nx*(j+ny*(k+aC))] + 1/wCoef[i+nx*(j+ny*(k+1+aC))]);
+                pCorrCoef[i+nx*(j+ny*(k+aT))] = -0.5 * density * areaZ * areaZ * (1/wCoef[i+nx*(j+ny*(k+nz*aC))] + 1/wCoef[i+nx*(j+ny*(k+1+nz*aC))]);
             }
             if (k > 0) {
-                pCorrCoef[i+nx*(j+ny*(k+aB))] = -0.5 * density * areaZ * areaZ * (1/wCoef[i+nx*(j+ny*(k+aC))] + 1/wCoef[i+nx*(j+ny*(k-1+aC))]);
+                pCorrCoef[i+nx*(j+ny*(k+aB))] = -0.5 * density * areaZ * areaZ * (1/wCoef[i+nx*(j+ny*(k+nz*aC))] + 1/wCoef[i+nx*(j+ny*(k-1+nz*aC))]);
             }
             pCorrCoef[id_aC] += -(pCorrCoef[id_aT] + pCorrCoef[id_aB]);
-        }
-
-
-        if (i == nx - 1 && typeE == 2) {
-            pCorrCoef[id_aW] += 0.5 * density * areaX * areaX / uCoef[i+nx*(j+ny*(k+aC))];
-        }
-        if (i == 0 && typeW == 2) {
-            pCorrCoef[id_aE] += 0.5 * density * areaX * areaX / uCoef[i+nx*(j+ny*(k+aC))];
-        }
-        if (j == ny - 1 && typeN == 2) {
-            pCorrCoef[id_aS] += 0.5 * density * areaY * areaY / vCoef[i+nx*(j+ny*(k+aC))];
-        }
-        if (j == 0 && typeS == 2) {
-            pCorrCoef[id_aN] += 0.5 * density * areaY * areaY / vCoef[i+nx*(j+ny*(k+aC))];
-        }
-        if (dim == 3) {
-            if (k == nz - 1 && typeT == 2) {
-                pCorrCoef[id_aB] += 0.5 * density * areaZ * areaZ / wCoef[i+nx*(j+ny*(k+aC))];
-            }
-            if (k == 0 && typeB == 2) {
-                pCorrCoef[id_aT] += 0.5 * density * areaZ * areaZ / wCoef[i+nx*(j+ny*(k+aC))];
-            }
         }
     }
 }
@@ -1033,8 +974,7 @@ void calcPresCorrLinkCoef(scalar *pCorrCoef_dev, scalar *uCoef_dev, scalar *vCoe
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    calcPresCorrLinkCoefKernel<<<numBlocks, threadsPerBlock>>>(pCorrCoef_dev, uCoef_dev, vCoef_dev, wCoef_dev, velBCs::type[east]
-        , velBCs::type[west], velBCs::type[north], velBCs::type[south], velBCs::type[top], velBCs::type[bottom]);
+    calcPresCorrLinkCoefKernel<<<numBlocks, threadsPerBlock>>>(pCorrCoef_dev, uCoef_dev, vCoef_dev, wCoef_dev);
 
     cudaDeviceSynchronize();
 }
@@ -1057,7 +997,7 @@ __global__ void calcPresCorrSrcTermKernel(scalar *pCorrSrcTerm, scalar *uf, scal
             int id_t = i + nx * (j + ny * (k+1));
             int id_b = i + nx * (j + ny * k    );
 
-            pCorrSrcTerm[id_C] += density * (areaZ * (wf[id_b] - wf[id_t]));
+            pCorrSrcTerm[id_C] += density * areaZ * (wf[id_b] - wf[id_t]);
         }
     }
 }
@@ -1081,7 +1021,8 @@ void calcPresCorrSrcTerm(scalar *pCorrSrcTerm_dev, scalar *uf_dev, scalar *vf_de
     cudaDeviceSynchronize();
 }
 
-__global__ void updateVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar *norm, int dir, int typeOnMin, int typeOnMax) {
+__global__ void updateVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar *norm, int dir, int typeOnMin, int typeOnMax
+    , scalar relax) {
 
     extern __shared__ scalar sharedNorm[];
 
@@ -1103,8 +1044,8 @@ __global__ void updateVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar
             id_Next = i + nx * (j+1 + ny * k);
             area = areaY;
         } else if (dir == zDir) { // z-direction
-            id_Prev = i + nx * (j + ny * k-1);
-            id_Next = i + nx * (j + ny * k+1);
+            id_Prev = i + nx * (j + ny * (k-1));
+            id_Next = i + nx * (j + ny * (k+1));
             area = areaZ;
         }
 
@@ -1152,7 +1093,7 @@ __global__ void updateVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar
     }
 }
 
-__global__ void updateFaceVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar *norm, int dir, int typeOnMin, int typeOnMax) {
+__global__ void updateFaceVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar *norm, int dir, scalar relax) {
 
     extern __shared__ scalar sharedNorm[];
 
@@ -1161,52 +1102,37 @@ __global__ void updateFaceVelKernel(scalar *vel, scalar *coef, scalar *pCorr, sc
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
-    if (i < nx && j < ny && k < nz) {
-        int id_c, id_Prev, id_PrevPrev, id_Next, id_NextNext;
+    if ((dir == xDir && i < nx+1 && j < ny   && k < nz) ||
+        (dir == yDir && i < nx   && j < ny+1 && k < nz) ||
+        (dir == zDir && i < nx   && j < ny   && k < nz+1)) {
+
+        int id_c, id_Prev, id_Next;
         scalar area;
         if (dir == xDir) { // x-direction
-            id_c        = i   + (nx+1) * (j + ny * k);
-            id_Prev     = i-1 + nx     * (j + ny * k);
-            id_PrevPrev = i-2 + nx     * (j + ny * k);
-            id_Next     = i   + nx     * (j + ny * k);
-            id_NextNext = i+1 + nx     * (j + ny * k);
+            id_c    = i   + (nx+1) * (j + ny * k);
+            id_Prev = i-1 + nx     * (j + ny * k);
+            id_Next = i   + nx     * (j + ny * k);
             area = areaX;
         } else if (dir == yDir) { // y-direction
-            id_c        = i + nx * (j   + (ny+1) * k);
-            id_Prev     = i + nx * (j-1 + ny     * k);
-            id_PrevPrev = i + nx * (j-2 + ny     * k);
-            id_Next     = i + nx * (j   + ny     * k);
-            id_NextNext = i + nx * (j+1 + ny     * k);
+            id_c    = i + nx * (j   + (ny+1) * k);
+            id_Prev = i + nx * (j-1 + ny     * k);
+            id_Next = i + nx * (j   + ny     * k);
             area = areaY;
         } else if (dir == zDir) { // z-direction
-            id_c        = i + nx * (j + ny * k    );
-            id_Prev     = i + nx * (j + ny * (k-1));
-            id_PrevPrev = i + nx * (j + ny * (k-2));
-            id_Next     = i + nx * (j + ny * k    );
-            id_NextNext = i + nx * (j + ny * (k+1));
+            id_c    = i + nx * (j + ny * k    );
+            id_Prev = i + nx * (j + ny * (k-1));
+            id_Next = i + nx * (j + ny * k    );
             area = areaZ;
         }
 
         scalar dvel;
 
-        if ((dir == xDir && i == 0) || (dir == yDir && j == 0) || (dir == zDir && k == 0)) {
-            if (typeOnMin == 0 || typeOnMin == 1) { // "wall" or "inlet"
-                dvel = 0;
-            } else if (typeOnMin == 2) {
-                scalar aC_Next = coef[id_Next+nx*ny*nz*aC];
-                dvel = -relax * 0.5 * pCorr[id_NextNext] * area / aC_Next;
-            }
-        } else if ((dir == xDir && i == nx-1) || (dir == yDir && j == ny-1) || (dir == zDir && k == nz-1)) {
-            if (typeOnMax == 0 || typeOnMax == 1) { // "wall" or "inlet"
-                dvel = 0;
-            } else if (typeOnMax == 2) {
-                scalar aC_Prev = coef[id_Prev+nx*ny*nz*aC];
-                dvel = relax * 0.5 * pCorr[id_PrevPrev] * area / aC_Prev;
-            }
+        if ((dir == xDir && (i == 0 || i == nx)) || (dir == yDir && (j == 0 || j == ny)) || (dir == zDir && (k == 0 || k == nz))) {
+            dvel = 0;
         } else {
             scalar aC_Prev = coef[id_Prev+nx*ny*nz*aC];
             scalar aC_Next = coef[id_Next+nx*ny*nz*aC];
-            dvel = relax * 0.5 * (1/aC_Prev + 1/aC_Next) * (pCorr[id_Prev] - pCorr[id_Next]);
+            dvel = relax * 0.5 * (1/aC_Prev + 1/aC_Next) * (pCorr[id_Prev] - pCorr[id_Next]) * area;
         }
 
         vel[id_c] += dvel;
@@ -1228,7 +1154,7 @@ __global__ void updateFaceVelKernel(scalar *vel, scalar *coef, scalar *pCorr, sc
     }
 }
 
-__global__ void updatePresKernel(scalar *p, scalar *pCorr, scalar *norm) {
+__global__ void updatePresKernel(scalar *p, scalar *pCorr, scalar *norm, scalar relax) {
 
     extern __shared__ scalar sharedNorm[];
 
@@ -1293,27 +1219,27 @@ void updateField(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uNorm_dev,
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    updatePresKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[0]>>>(p_dev, pCorr_dev, pNorm_dev);
+    updatePresKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[0]>>>(p_dev, pCorr_dev, pNorm_dev, relax_p);
 
     updateVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[1]>>>(u_dev, uCoef_dev, pCorr_dev, uNorm_dev
-        , xDir, velBCs::type[west], velBCs::type[east]);
+        , xDir, velBCs::type[west], velBCs::type[east], relax_u);
 
     updateVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[2]>>>(v_dev, vCoef_dev, pCorr_dev, vNorm_dev
-        , yDir, velBCs::type[south], velBCs::type[north]);
+        , yDir, velBCs::type[south], velBCs::type[north], relax_v);
 
     numBlocks.x = (nx+1 + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
     updateFaceVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[3]>>>(uf_dev, uCoef_dev, pCorr_dev
-        , ufNorm_dev, xDir, velBCs::type[west], velBCs::type[east]);
+        , ufNorm_dev, xDir, relax_u);
 
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = (ny+1 + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
     updateFaceVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[4]>>>(vf_dev, vCoef_dev, pCorr_dev
-        , vfNorm_dev, yDir, velBCs::type[south], velBCs::type[north]);
+        , vfNorm_dev, yDir, relax_v);
 
     if (dim == 3) {
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
@@ -1321,14 +1247,14 @@ void updateField(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uNorm_dev,
         numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
         updateVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[5]>>>(w_dev, wCoef_dev, pCorr_dev, wNorm_dev
-            , zDir, velBCs::type[bottom], velBCs::type[top]);
+            , zDir, velBCs::type[bottom], velBCs::type[top], relax_w);
 
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
         numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
         numBlocks.z = (nz+1 + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
         updateFaceVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[6]>>>(wf_dev, wCoef_dev, pCorr_dev
-            , wfNorm_dev, zDir, velBCs::type[bottom], velBCs::type[top]);
+            , wfNorm_dev, zDir, relax_w);
     }
 
     for (int i = 0; i < 2*dim+1; ++i) {

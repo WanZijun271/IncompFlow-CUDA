@@ -5,7 +5,7 @@
 int main() {
     auto start = std::chrono::high_resolution_clock::now();
 
-    Solver solver{};
+    Solver solver{0, 0, 0, 0, 0};
     // solver.writeVTK("temp.vtk");
     solver.solve();
 

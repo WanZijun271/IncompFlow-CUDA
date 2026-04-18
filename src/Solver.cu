@@ -38,7 +38,7 @@ void Solver::solve() {
     cudaMemcpy(w_dev, _w.data(), fieldSize, cudaMemcpyHostToDevice);
     cudaMemcpy(p_dev, _p.data(), fieldSize, cudaMemcpyHostToDevice);
     cudaMemcpy(temp_dev, _temp.data(), fieldSize, cudaMemcpyHostToDevice);
-    cudaMemset(pCorr_dev, 0.0, fieldSize);
+    cudaMemset(pCorr_dev, 0, fieldSize);
 
     size_t ufSize = (nx+1) * ny * nz * sizeof(scalar);
     size_t vfSize = nx * (ny+1) * nz * sizeof(scalar);
@@ -49,9 +49,9 @@ void Solver::solve() {
     cudaMalloc(&vf_dev, vfSize);
     cudaMalloc(&wf_dev, wfSize);
 
-    cudaMemset(uf_dev, 0.0, ufSize);
-    cudaMemset(vf_dev, 0.0, vfSize);
-    cudaMemset(wf_dev, 0.0, wfSize);
+    cudaMemset(uf_dev, 0, ufSize);
+    cudaMemset(vf_dev, 0, vfSize);
+    cudaMemset(wf_dev, 0, wfSize);
 
     size_t coefSize = nx * ny * nz * (1+2*dim) * sizeof(scalar);
 
@@ -61,10 +61,10 @@ void Solver::solve() {
     cudaMalloc(&wCoef_dev, coefSize);
     cudaMalloc(&pCorrCoef_dev, coefSize);
 
-    cudaMemset(uCoef_dev, 0.0, coefSize);
-    cudaMemset(vCoef_dev, 0.0, coefSize);
-    cudaMemset(wCoef_dev, 0.0, coefSize);
-    cudaMemset(pCorrCoef_dev, 0.0, coefSize);
+    cudaMemset(uCoef_dev, 0, coefSize);
+    cudaMemset(vCoef_dev, 0, coefSize);
+    cudaMemset(wCoef_dev, 0, coefSize);
+    cudaMemset(pCorrCoef_dev, 0, coefSize);
 
     size_t srcTermSize = nx * ny * nz * sizeof(scalar);
 
@@ -74,10 +74,10 @@ void Solver::solve() {
     cudaMalloc(&wSrcTerm_dev, srcTermSize);
     cudaMalloc(&pCorrSrcTerm_dev, srcTermSize);
 
-    cudaMemset(uSrcTerm_dev, 0.0, srcTermSize);
-    cudaMemset(vSrcTerm_dev, 0.0, srcTermSize);
-    cudaMemset(wSrcTerm_dev, 0.0, srcTermSize);
-    cudaMemset(pCorrSrcTerm_dev, 0.0, srcTermSize);
+    cudaMemset(uSrcTerm_dev, 0, srcTermSize);
+    cudaMemset(vSrcTerm_dev, 0, srcTermSize);
+    cudaMemset(wSrcTerm_dev, 0, srcTermSize);
+    cudaMemset(pCorrSrcTerm_dev, 0, srcTermSize);
 
     scalar *uNorm_dev, *vNorm_dev, *wNorm_dev, *ufNorm_dev, *vfNorm_dev, *wfNorm_dev, *pNorm_dev;
     cudaMalloc(&uNorm_dev, sizeof(scalar));
@@ -107,10 +107,10 @@ void Solver::solve() {
 
         applyBCsToMomEq(uCoef_dev, uSrcTerm_dev, vCoef_dev, vSrcTerm_dev, wCoef_dev, wSrcTerm_dev);
 
-        pointJacobiIterate(u_dev, fieldSize, uCoef_dev, uSrcTerm_dev);
-        pointJacobiIterate(v_dev, fieldSize, vCoef_dev, vSrcTerm_dev);
+        pointJacobiIterate(u_dev, fieldSize, uCoef_dev, uSrcTerm_dev, nIter_u, relax_u, tol_u);
+        pointJacobiIterate(v_dev, fieldSize, vCoef_dev, vSrcTerm_dev, nIter_v, relax_v, tol_v);
         if (dim == 3) {
-            pointJacobiIterate(w_dev, fieldSize, wCoef_dev, wSrcTerm_dev);
+            pointJacobiIterate(w_dev, fieldSize, wCoef_dev, wSrcTerm_dev, nIter_w, relax_w, tol_w);
         }
 
         RhieChowInterpolate(uf_dev, vf_dev, wf_dev, u_dev, v_dev, w_dev, uCoef_dev, vCoef_dev, wCoef_dev, p_dev);
@@ -120,7 +120,7 @@ void Solver::solve() {
 
         calcPresCorrSrcTerm(pCorrSrcTerm_dev, uf_dev, vf_dev, wf_dev);
 
-        pointJacobiIterate(pCorr_dev, fieldSize, pCorrCoef_dev, pCorrSrcTerm_dev);
+        pointJacobiIterate(pCorr_dev, fieldSize, pCorrCoef_dev, pCorrSrcTerm_dev, nIter_p, relax_p, tol_p);
 
         updateField(u_dev, v_dev, w_dev, uNorm_dev, vNorm_dev, wNorm_dev, uf_dev, vf_dev, wf_dev, ufNorm_dev, vfNorm_dev, wfNorm_dev
             , p_dev, pNorm_dev, uCoef_dev, vCoef_dev, wCoef_dev, pCorr_dev);
@@ -191,6 +191,52 @@ void Solver::solve() {
     cudaMemcpy(_w.data(), w_dev, fieldSize, cudaMemcpyDeviceToHost);
     cudaMemcpy(_p.data(), p_dev, fieldSize, cudaMemcpyDeviceToHost);
     cudaMemcpy(_temp.data(), temp_dev, fieldSize, cudaMemcpyDeviceToHost);
+
+    vector<scalar> uf((nx+1)*ny*nz, 0);
+
+    cudaMemcpy(uf.data(), uf_dev, ufSize, cudaMemcpyDeviceToHost);
+
+    for (int j = ny - 1; j >= 0; --j) {
+        for (int i = 0; i < nx+1; ++i) {
+            cout << uf[i+(nx+1)*j] << ' ';
+        }
+        cout << endl;
+    }
+
+    /* cout << "----------------------------------" << endl;
+
+    vector<scalar> uCoef(nx*ny*nz*(1+2*dim), 0);
+
+    cudaMemcpy(uCoef.data(), uCoef_dev, coefSize, cudaMemcpyDeviceToHost);
+
+    for (int j = ny - 1; j >= 0; --j) {
+        for (int i = 0; i < nx; ++i) {
+            cout << uCoef[i+nx*(j+ny*aW)] << ' ';
+        }
+        cout << endl;
+    }
+
+    cout << "----------------------------------" << endl;
+
+    vector<scalar> uSrcTerm(nx*ny*nz, 0);
+
+    cudaMemcpy(uSrcTerm.data(), uSrcTerm_dev, srcTermSize, cudaMemcpyDeviceToHost);
+
+    for (int j = ny - 1; j >= 0; --j) {
+        for (int i = 0; i < nx; ++i) {
+            cout << uSrcTerm[i+nx*j] << ' ';
+        }
+        cout << endl;
+    }
+
+    cout << "----------------------------------" << endl;
+
+    for (int j = ny - 1; j >= 0; --j) {
+        for (int i = 0; i < nx; ++i) {
+            cout << _u[i+nx*j] << ' ';
+        }
+        cout << endl;
+    } */
 
     cudaFree(u_dev);
     cudaFree(v_dev);
