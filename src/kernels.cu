@@ -8,45 +8,40 @@
 
 using namespace std;
 
-__global__ void initUfKernel(scalar *u, scalar *uf) {
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (i < nx && j < ny && k < nz) {
-        int id_c = i     + (nx+1) * (j + ny * k);
-        int id_W = (i-1) + nx     * (j + ny * k);
-        int id_E = i     + nx     * (j + ny * k);
-        uf[id_c] = (u[id_W] + u[id_E]) / 2;
-    }
-}
-
-__global__ void initVfKernel(scalar *v, scalar *vf) {
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (i < nx && j < ny && k < nz) {
-        int id_c = i + nx * (j   + (ny+1) * k);
-        int id_S = i + nx * (j-1 + ny     * k);
-        int id_N = i + nx * (j   + ny     * k);
-        vf[id_c] = (v[id_S] + v[id_N]) / 2;
-    }
-}
-
-__global__ void initWfKernel(scalar *w, scalar *wf) {
+template<int dir>
+__global__ void initFaceVelKernel(scalar *u, scalar *uf) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z + 1;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if constexpr (dir == xDir) {
+        ++i;
+    } else if constexpr (dir == yDir) {
+        ++j;
+    } else if constexpr (dir == zDir) {
+        ++k;
+    }
 
     if (i < nx && j < ny && k < nz) {
-        int id_c = i + nx * (j + ny * k    );
-        int id_B = i + nx * (j + ny * (k-1));
-        int id_T = i + nx * (j + ny * k    );
-        wf[id_c] = (w[id_B] + w[id_T]) / 2;
+
+        int cId, LId, RId;
+
+        if constexpr (dir == xDir) {
+            cId = i     + (nx+1) * (j + ny * k);
+            LId = (i-1) + nx     * (j + ny * k);
+            RId = i     + nx     * (j + ny * k);
+        } else if constexpr (dir == yDir) {
+            cId = i + nx * (j   + (ny+1) * k);
+            LId = i + nx * (j-1 + ny     * k);
+            RId = i + nx * (j   + ny     * k);
+        } else if constexpr (dir == zDir) {
+            cId = i + nx * (j + ny * k    );
+            LId = i + nx * (j + ny * (k-1));
+            RId = i + nx * (j + ny * k    );
+        }
+
+        uf[cId] = (u[LId] + u[RId]) / 2;
     }
 }
 
@@ -59,27 +54,27 @@ void initFaceVel(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uf_dev, sc
 
     dim3 threadsPerBlock;
     dim3 numBlocks;
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 16, 8);
     }
 
     numBlocks.x = (nx - 1 + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    initUfKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(u_dev, uf_dev);
+    initFaceVelKernel<xDir><<<numBlocks, threadsPerBlock, 0, stream[0]>>>(u_dev, uf_dev);
 
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = (ny - 1 + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    initVfKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(v_dev, vf_dev);
+    initFaceVelKernel<yDir><<<numBlocks, threadsPerBlock, 0, stream[1]>>>(v_dev, vf_dev);
 
-    if (dim == 3) {
+    if constexpr (dim == 3) {
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
         numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
         numBlocks.z = (nz - 1 + threadsPerBlock.z - 1) / threadsPerBlock.z;
-        initWfKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(w_dev, wf_dev);
+        initFaceVelKernel<zDir><<<numBlocks, threadsPerBlock, 0, stream[2]>>>(w_dev, wf_dev);
     }
 
     for (int i = 0; i < dim; ++i) {
@@ -91,65 +86,52 @@ void initFaceVel(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uf_dev, sc
     }
 }
 
-__global__ void applyBCsToUfKernel(scalar *uf, scalar *u, int i, int type, scalar val) {
-
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (j < ny && k < nz) {
-        int id = i + (nx+1) * (j + ny * k);
-        if (type == 0) { // "wall"
-            uf[id] = 0;
-        } else if (type == 1) { // "inlet"
-            uf[id] = val;
-        } else if (type == 2) { // "outlet"
-            if (i == 0) {
-                uf[id] = u[0 + nx * (j + ny * k)];
-            } else if (i == nx) {
-                uf[id] = u[nx-1 + nx * (j + ny * k)];
-            }
-        }
-    }
-}
-
-__global__ void applyBCsToVfKernel(scalar *vf, scalar *v, int j, int type, scalar val) {
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (i < nx && k < nz) {
-        int id = i + nx * (j + (ny+1) * k);
-        if (type == 0) { // "wall"
-            vf[id] = 0;
-        } else if (type == 1) { // "inlet"
-            vf[id] = val;
-        } else if (type == 2) { // "outlet"
-            if (j == 0) {
-                vf[id] = v[i + nx * (0 + ny * k)];
-            } else if (j == ny) {
-                vf[id] = v[i + nx * (ny-1 + ny * k)];
-            }
-        }
-    }
-}
-
-__global__ void applyBCsToWfKernel(scalar *wf, scalar *w, int k, int type, scalar val) {
+template<int loc, int bcType>
+__global__ void applyBCsToFaceVelKernel(scalar *uf, scalar *u, scalar bcVal) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (i < nx && j < ny) {
-        int id = i + nx * (j + ny * k);
-        if (type == 0) { // "wall"
-            wf[id] = 0;
-        } else if (type == 1) { // "inlet"
-            wf[id] = val;
-        } else if (type == 2) { // "outlet"
-            if (k == 0) {
-                wf[id] = w[i + nx * (j + ny * 0)];
-            } else if (k == nz) {
-                wf[id] = w[i + nx * (j + ny * (nz-1))];
-            }
+    bool loopFlag;
+
+    if constexpr (loc == west || loc == east) {
+        loopFlag = (i < ny && j < nz);
+    } else if constexpr (loc == south || loc == north) {
+        loopFlag = (i < nx && j < nz);
+    }  else if constexpr (loc == bottom || loc == top) {
+        loopFlag = (i < nx && j < ny);
+    }
+
+    if (loopFlag) {
+
+        int cId, NbId;
+
+        if constexpr (loc == west) {
+            cId  = 0 + (nx+1) * (i + ny * j);
+            NbId = 0 + nx     * (i + ny * j);
+        } else if constexpr (loc == east) {
+            cId  = nx   + (nx+1) * (i + ny * j);
+            NbId = nx-1 + nx     * (i + ny * j);
+        } else if constexpr (loc == south) {
+            cId  = i + nx * (0 + (ny+1) * j);
+            NbId = i + nx * (0 + ny     * j);
+        } else if constexpr (loc == north) {
+            cId  = i + nx * (ny   + (ny+1) * j);
+            NbId = i + nx * (ny-1 + ny     * j);
+        } else if constexpr (loc == bottom) {
+            cId  = i + nx * (j + ny * 0);
+            NbId = i + nx * (j + ny * 0);
+        } else if constexpr (loc == top) {
+            cId  = i + nx * (j + ny * nz    );
+            NbId = i + nx * (j + ny * (nz-1));
+        }
+
+        if constexpr (bcType == wall) {
+            uf[cId] = 0;
+        } else if constexpr (bcType == inlet) {
+            uf[cId] = bcVal;
+        } else if constexpr (bcType == outlet) {
+            uf[cId] = u[NbId];
         }
     }
 }
@@ -164,35 +146,42 @@ void applyBCsToFaceVel(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *u
     dim3 threadsPerBlock;
     dim3 numBlocks;
 
-    if (dim == 2) {
-        threadsPerBlock = dim3(1, 1024, 1);
-    } else if (dim == 3) {
-        threadsPerBlock = dim3(1, 32, 32);
-    }
-    numBlocks.x = 1;
-    numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
-    numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    applyBCsToUfKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uf_dev, u_dev, 0, velBCs::type[west], velBCs::val[west][0]);
-    applyBCsToUfKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(uf_dev, u_dev, nx, velBCs::type[east], velBCs::val[east][0]);
-
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(1024, 1, 1);
-    } else if (dim == 3) {
-        threadsPerBlock = dim3(32, 1, 32);
-    }
-    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
-    numBlocks.y = 1;
-    numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    applyBCsToVfKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(vf_dev, v_dev, 0, velBCs::type[south], velBCs::val[south][1]);
-    applyBCsToVfKernel<<<numBlocks, threadsPerBlock, 0, stream[3]>>>(vf_dev, v_dev, ny, velBCs::type[north], velBCs::val[north][1]);
-
-    if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(32, 32, 1);
+    }
+
+    numBlocks.x = (ny + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    applyBCsToFaceVelKernel<west, velBCs::type[west]><<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uf_dev, u_dev
+        , velBCs::val[west][0]);
+
+    applyBCsToFaceVelKernel<east, velBCs::type[east]><<<numBlocks, threadsPerBlock, 0, stream[1]>>>(uf_dev, u_dev
+        , velBCs::val[east][0]);
+
+    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    applyBCsToFaceVelKernel<south, velBCs::type[south]><<<numBlocks, threadsPerBlock, 0, stream[2]>>>(vf_dev, v_dev
+        , velBCs::val[south][1]);
+
+    applyBCsToFaceVelKernel<north, velBCs::type[north]><<<numBlocks, threadsPerBlock, 0, stream[3]>>>(vf_dev, v_dev
+        , velBCs::val[north][1]);
+
+    if constexpr (dim == 3) {
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
         numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
         numBlocks.z = 1;
-        applyBCsToWfKernel<<<numBlocks, threadsPerBlock, 0, stream[4]>>>(wf_dev, w_dev, 0, velBCs::type[bottom], velBCs::val[bottom][2]);
-        applyBCsToWfKernel<<<numBlocks, threadsPerBlock, 0, stream[5]>>>(wf_dev, w_dev, nz, velBCs::type[top], velBCs::val[top][2]);
+
+        applyBCsToFaceVelKernel<bottom, velBCs::type[bottom]><<<numBlocks, threadsPerBlock, 0, stream[4]>>>(wf_dev, w_dev
+            , velBCs::val[bottom][2]);
+
+        applyBCsToFaceVelKernel<top, velBCs::type[top]><<<numBlocks, threadsPerBlock, 0, stream[5]>>>(wf_dev, w_dev
+            , velBCs::val[top][2]);
     }
 
     for (int i = 0; i < 2*dim; ++i) {
@@ -211,33 +200,34 @@ __global__ void calcMomLinkCoefKernel(scalar *coef, scalar *uf, scalar *vf, scal
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
+
         scalar ue = uf[i+1 + (nx+1) * (j   + ny     * k)];
         scalar uw = uf[i   + (nx+1) * (j   + ny     * k)];
         scalar vn = vf[i   + nx     * (j+1 + (ny+1) * k)];
         scalar vs = vf[i   + nx     * (j   + (ny+1) * k)];
 
-        int id_aE = i + nx * (j + ny * (k + nz * aE));
-        int id_aW = i + nx * (j + ny * (k + nz * aW));
-        int id_aN = i + nx * (j + ny * (k + nz * aN));
-        int id_aS = i + nx * (j + ny * (k + nz * aS));
-        int id_aC = i + nx * (j + ny * (k + nz * aC));
+        int aEId = i + nx * (j + ny * (k + nz * aE));
+        int aWId = i + nx * (j + ny * (k + nz * aW));
+        int aNId = i + nx * (j + ny * (k + nz * aN));
+        int aSId = i + nx * (j + ny * (k + nz * aS));
+        int aCId = i + nx * (j + ny * (k + nz * aC));
 
-        coef[id_aE] = (density * (ue  - abs(ue)) * areaX) / 2 - dynamicViscosity * areaX / dx;
-        coef[id_aW] = (density * (-uw - abs(uw)) * areaX) / 2 - dynamicViscosity * areaX / dx;
-        coef[id_aN] = (density * (vn  - abs(vn)) * areaY) / 2 - dynamicViscosity * areaY / dy;
-        coef[id_aS] = (density * (-vs - abs(vs)) * areaY) / 2 - dynamicViscosity * areaY / dy;
-        coef[id_aC] = -(coef[id_aE] + coef[id_aW] + coef[id_aN] + coef[id_aS]);
+        coef[aEId] = (density * min(ue , (scalar)0) * areaX) - dynamicViscosity * areaX / dx;
+        coef[aWId] = (density * min(-uw, (scalar)0) * areaX) - dynamicViscosity * areaX / dx;
+        coef[aNId] = (density * min(vn , (scalar)0) * areaY) - dynamicViscosity * areaY / dy;
+        coef[aSId] = (density * min(-vs, (scalar)0) * areaY) - dynamicViscosity * areaY / dy;
+        coef[aCId] = -(coef[aEId] + coef[aWId] + coef[aNId] + coef[aSId]);
 
-        if (dim == 3) {
+        if constexpr (dim == 3) {
             scalar wt = wf[k+1 + (nz+1) * (i + nx * j)];
             scalar wb = wf[k   + (nz+1) * (i + nx * j)];
 
-            int id_aT = i + nx * (j + ny * (k + aT));
-            int id_aB = i + nx * (j + ny * (k + aB));
+            int aTId = i + nx * (j + ny * (k + aT));
+            int aBId = i + nx * (j + ny * (k + aB));
 
-            coef[id_aT] = (density * (wt  - abs(wt)) * areaZ) / 2 - dynamicViscosity * areaZ / dz;
-            coef[id_aB] = (density * (-wb - abs(wb)) * areaZ) / 2 - dynamicViscosity * areaZ / dz;
-            coef[id_aC] += -(coef[id_aT] + coef[id_aB]);
+            coef[aTId] = (density * min(wt , (scalar)0) * areaZ) - dynamicViscosity * areaZ / dz;
+            coef[aBId] = (density * min(-wb, (scalar)0) * areaZ) - dynamicViscosity * areaZ / dz;
+            coef[aCId] += -(coef[aTId] + coef[aBId]);
         }
     }
 }
@@ -247,9 +237,9 @@ void calcMomLinkCoef(scalar *coef_dev, scalar *uf_dev, scalar *vf_dev, scalar *w
     dim3 threadsPerBlock;
     dim3 numBlocks; 
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 8, 8);
     }
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
@@ -261,163 +251,279 @@ void calcMomLinkCoef(scalar *coef_dev, scalar *uf_dev, scalar *vf_dev, scalar *w
     cudaDeviceSynchronize();
 }
 
-__global__ void calcMomSrcTermKernel(scalar *srcTerm, scalar *p, int dir, int typeL, int typeR) {
+template<int dir>
+__global__ void calcInteriorMomSrcTermKernel(scalar *srcTerm, scalar *p) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
-    if (i < nx && j < ny && k < nz) {
-        int id_C = i   + nx * (j + ny * k);
-        int id_L, id_R;
+    bool loopFlag;
+
+    if constexpr (dir == xDir) {
+        ++i;
+        loopFlag = (i < nx-1 && j < ny && k < nz);
+    } else if constexpr (dir == yDir) {
+        ++j;
+        loopFlag = (i < nx && j < ny-1 && k < nz);
+    } else if constexpr (dir == zDir) {
+        ++k;
+        loopFlag = (i < nx && j < ny && k < nz-1);
+    }
+
+    if (loopFlag) {
+
+        int CId = i + nx * (j + ny * k);
+        int LId, RId;
         scalar area;
-        if (dir == xDir) {
-            id_L = i-1 + nx * (j + ny * k);
-            id_R = i+1 + nx * (j + ny * k);
+
+        if constexpr (dir == xDir) {
+            LId = i-1 + nx * (j + ny * k);
+            RId = i+1 + nx * (j + ny * k);
             area = areaX;
-        } else if (dir == yDir) {
-            id_L = i + nx * (j-1 + ny * k);
-            id_R = i + nx * (j+1 + ny * k);
+        } else if constexpr (dir == yDir) {
+            LId = i + nx * (j-1 + ny * k);
+            RId = i + nx * (j+1 + ny * k);
             area = areaY;
-        } else if (dir == zDir) {
-            id_L = i + nx * (j + ny * (k-1));
-            id_R = i + nx * (j + ny * (k+1));
+        } else if constexpr (dir == zDir) {
+            LId = i + nx * (j + ny * (k-1));
+            RId = i + nx * (j + ny * (k+1));
+            area = areaZ;
+        }
+        
+        srcTerm[CId] = 0.5 * (p[LId] - p[RId]) * area;
+    }
+}
+
+template<int loc, int bcType>
+__global__ void calcBCMomSrcTermKernel(scalar *srcTerm, scalar *p) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+    bool loopFlag;
+
+    if constexpr (loc == west || loc == east) {
+        loopFlag = (i < ny && j < nz);
+    } else if constexpr (loc == south || loc == north) {
+        loopFlag = (i < nx && j < nz);
+    }  else if constexpr (loc == bottom || loc == top) {
+        loopFlag = (i < nx && j < ny);
+    }
+
+    if (loopFlag) {
+
+        int CId, LId, RId;
+
+        if constexpr (loc == west) {
+            CId = 0 + nx * (i + ny * j);
+            RId = 1 + nx * (i + ny * j);
+        } else if constexpr (loc == east) {
+            CId = nx-1 + nx * (i + ny * j);
+            LId = nx-2 + nx * (i + ny * j);
+        } else if constexpr (loc == south) {
+            CId = i + nx * (0 + ny * j);
+            RId = i + nx * (1 + ny * j);
+        } else if constexpr (loc == north) {
+            CId = i + nx * (ny-1 + ny * j);
+            LId = i + nx * (ny-2 + ny * j);
+        } else if constexpr (loc == bottom) {
+            CId = i + nx * (j + ny * 0);
+            RId = i + nx * (j + ny * 1);
+        } else if constexpr (loc == top) {
+            CId = i + nx * (j + ny * (nz-1));
+            LId = i + nx * (j + ny * (nz-2));
+        }
+
+        scalar area;
+
+        if constexpr (loc == west || loc == east) {
+            area = areaX;
+        } else if constexpr (loc == south || loc == north) {
+            area = areaY;
+        } else if constexpr (loc == bottom || loc == top) {
             area = areaZ;
         }
 
         scalar p_L, p_R;
-        if ((dir == xDir && i == 0) || (dir == yDir && j == 0) || (dir == zDir && k == 0)) {
-            if (typeL == 0 || typeL == 1) { // "wall" or "inlet"
-                p_L = p[id_C];
-            } else if (typeL == 2) { // "outlet"
+
+        if constexpr (loc == west || loc == south || loc == bottom) {
+            if constexpr (bcType == wall || bcType == inlet) {
+                p_L = p[CId];
+            } else if constexpr (bcType == outlet) {
                 p_L = 0;
             }
-            p_R = p[id_R];
-        } else if ((dir == xDir && i == nx-1) || (dir == yDir && j == ny-1) || (dir == zDir && k == nz-1)) {
-            if (typeR == 0 || typeR == 1) { // "wall" or "inlet"
-                p_R = p[id_C];
-            } else if (typeR == 2) { // "outlet"
+            p_R = p[RId];
+        } else if constexpr (loc == east || loc == north || loc == top) {
+            if constexpr (bcType == wall || bcType == inlet) {
+                p_R = p[CId];
+            } else if constexpr (bcType == outlet) {
                 p_R = 0;
             }
-            p_L = p[id_L];
-        } else {
-            p_L = p[id_L];
-            p_R = p[id_R];
+            p_L = p[LId];
         }
-        srcTerm[id_C] = 0.5 * (p_L - p_R) * area;
+
+        srcTerm[CId] = 0.5 * (p_L - p_R) * area;
     }
 }
 
 void calcMomSrcTerm(scalar *uSrcTerm_dev, scalar *vSrcTerm_dev, scalar *wSrcTerm_dev, scalar *p_dev) {
 
-    cudaStream_t stream[dim];
-    for (int i = 0; i < dim; ++i) {
+    cudaStream_t stream[3*dim];
+    for (int i = 0; i < 3*dim; ++i) {
         cudaStreamCreate(&stream[i]);
     }
 
     dim3 threadsPerBlock;
     dim3 numBlocks; 
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 8, 8);
     }
-    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
-    numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
-    numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    calcMomSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uSrcTerm_dev, p_dev, xDir, velBCs::type[west]
-        , velBCs::type[east]);
+    numBlocks.x = (nx-2 + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny   + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz   + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    calcMomSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(vSrcTerm_dev, p_dev, yDir, velBCs::type[south]
-        , velBCs::type[north]);
+    calcInteriorMomSrcTermKernel<xDir><<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uSrcTerm_dev, p_dev);
 
-    if (dim == 3) {
-        calcMomSrcTermKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(wSrcTerm_dev, p_dev, zDir, velBCs::type[bottom]
-            , velBCs::type[top]);
+    numBlocks.x = (nx   + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny-2 + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz   + threadsPerBlock.z - 1) / threadsPerBlock.z;
+
+    calcInteriorMomSrcTermKernel<yDir><<<numBlocks, threadsPerBlock, 0, stream[1]>>>(vSrcTerm_dev, p_dev);
+
+    if constexpr (dim == 3) {
+        numBlocks.x = (nx   + threadsPerBlock.x - 1) / threadsPerBlock.x;
+        numBlocks.y = (ny   + threadsPerBlock.y - 1) / threadsPerBlock.y;
+        numBlocks.z = (nz-2 + threadsPerBlock.z - 1) / threadsPerBlock.z;
+
+        calcInteriorMomSrcTermKernel<zDir><<<numBlocks, threadsPerBlock, 0, stream[6]>>>(wSrcTerm_dev, p_dev);
     }
 
-    for (int i = 0; i < dim; ++i) {
+    if constexpr (dim == 2) {
+        threadsPerBlock = dim3(1024, 1, 1);
+    } else if constexpr (dim == 3) {
+        threadsPerBlock = dim3(32, 32, 1);
+    }
+
+    numBlocks.x = (ny + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    calcBCMomSrcTermKernel<west, velBCs::type[west]><<<numBlocks, threadsPerBlock, 0, stream[2]>>>(uSrcTerm_dev, p_dev);
+
+    calcBCMomSrcTermKernel<east, velBCs::type[east]><<<numBlocks, threadsPerBlock, 0, stream[3]>>>(uSrcTerm_dev, p_dev);
+
+    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    calcBCMomSrcTermKernel<south, velBCs::type[south]><<<numBlocks, threadsPerBlock, 0, stream[4]>>>(vSrcTerm_dev, p_dev);
+
+    calcBCMomSrcTermKernel<north, velBCs::type[north]><<<numBlocks, threadsPerBlock, 0, stream[5]>>>(vSrcTerm_dev, p_dev);
+
+    if constexpr (dim == 3) {
+        numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+        numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
+        numBlocks.z = 1;
+
+        calcBCMomSrcTermKernel<bottom, velBCs::type[bottom]><<<numBlocks, threadsPerBlock, 0, stream[7]>>>(wSrcTerm_dev, p_dev);
+
+        calcBCMomSrcTermKernel<top, velBCs::type[top]><<<numBlocks, threadsPerBlock, 0, stream[8]>>>(wSrcTerm_dev, p_dev);
+    }
+
+    for (int i = 0; i < 3*dim; ++i) {
         cudaStreamSynchronize(stream[i]);
     }
 
-    for (int i = 0; i < dim; ++i) {
+    for (int i = 0; i < 3*dim; ++i) {
         cudaStreamDestroy(stream[i]);
     }
 }
 
+template<int loc, int bcType>
 __global__ void applyBCsToMomEqKernel(scalar *uCoef, scalar *vCoef, scalar *wCoef, scalar *uSrcTerm, scalar *vSrcTerm
-    , scalar *wSrcTerm, int location, int type, scalar uBC, scalar vBC, scalar wBC) {
+    , scalar *wSrcTerm, scalar uBC, scalar vBC, scalar wBC) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (((location == east  || location == west  ) && i < ny && j < nz) ||
-        ((location == north || location == south ) && i < nx && j < nz) ||
-        ((location == top   || location == bottom) && i < nx && j < ny)) {
+    bool loopFlag;
 
-        int id_aC, id_aIn, id_aOut, id_b;
-        if (location == east) {
-            id_aC   = nx-1 + nx * (i + ny * (j + nz * aC));
-            id_aIn  = nx-1 + nx * (i + ny * (j + nz * aW));
-            id_aOut = nx-1 + nx * (i + ny * (j + nz * aE));
-            id_b    = nx-1 + nx * (i + ny * j);
-        } else if (location == west) {
-            id_aC   = 0 + nx * (i + ny * (j + nz * aC));
-            id_aIn  = 0 + nx * (i + ny * (j + nz * aE));
-            id_aOut = 0 + nx * (i + ny * (j + nz * aW));
-            id_b    = 0 + nx * (i + ny * j);
-        } else if (location == north) {
-            id_aC   = i + nx * (ny-1 + ny * (j + nz * aC));
-            id_aIn  = i + nx * (ny-1 + ny * (j + nz * aS));
-            id_aOut = i + nx * (ny-1 + ny * (j + nz * aN));
-            id_b    = i + nx * (ny-1 + ny * j);
-        } else if (location == south) {
-            id_aC   = i + nx * (0 + ny * (j + nz * aC));
-            id_aIn  = i + nx * (0 + ny * (j + nz * aN));
-            id_aOut = i + nx * (0 + ny * (j + nz * aS));
-            id_b    = i + nx * (0 + ny * j);
-        } else if (location == top) {
-            id_aC   = i + nx * (j + ny * (nz-1 + nz * aC));
-            id_aIn  = i + nx * (i + ny * (nz-1 + nz * aB));
-            id_aOut = i + nx * (j + ny * (nz-1 + nz * aT));
-            id_b    = i + nx * (j + ny * (nz-1));
-        } else if (location == bottom) {
-            id_aC   = i + nx * (j + ny * (0 + nz * aC));
-            id_aIn  = i + nx * (i + ny * (0 + nz * aT));
-            id_aOut = i + nx * (j + ny * (0 + nz * aB));
-            id_b    = i + nx * (j + ny * 0);
+    if constexpr (loc == east || loc == west) {
+        loopFlag = (i < ny && j < nz);
+    } else if constexpr (loc == north || loc == south) {
+        loopFlag = (i < nx && j < nz);
+    } else if constexpr (loc == top || loc == bottom) {
+        loopFlag = (i < nx && j < ny);
+    }
+
+    if (loopFlag) {
+
+        int aCId, aInId, aExId, CId;
+
+        if constexpr (loc == east) {
+            aCId  = nx-1 + nx * (i + ny * (j + nz * aC));
+            aInId = nx-1 + nx * (i + ny * (j + nz * aW));
+            aExId = nx-1 + nx * (i + ny * (j + nz * aE));
+            CId   = nx-1 + nx * (i + ny * j);
+        } else if constexpr (loc == west) {
+            aCId  = 0 + nx * (i + ny * (j + nz * aC));
+            aInId = 0 + nx * (i + ny * (j + nz * aE));
+            aExId = 0 + nx * (i + ny * (j + nz * aW));
+            CId   = 0 + nx * (i + ny * j);
+        } else if constexpr (loc == north) {
+            aCId  = i + nx * (ny-1 + ny * (j + nz * aC));
+            aInId = i + nx * (ny-1 + ny * (j + nz * aS));
+            aExId = i + nx * (ny-1 + ny * (j + nz * aN));
+            CId   = i + nx * (ny-1 + ny * j);
+        } else if constexpr (loc == south) {
+            aCId  = i + nx * (0 + ny * (j + nz * aC));
+            aInId = i + nx * (0 + ny * (j + nz * aN));
+            aExId = i + nx * (0 + ny * (j + nz * aS));
+            CId   = i + nx * (0 + ny * j);
+        } else if constexpr (loc == top) {
+            aCId  = i + nx * (j + ny * (nz-1 + nz * aC));
+            aInId = i + nx * (i + ny * (nz-1 + nz * aB));
+            aExId = i + nx * (j + ny * (nz-1 + nz * aT));
+            CId   = i + nx * (j + ny * (nz-1));
+        } else if constexpr (loc == bottom) {
+            aCId  = i + nx * (j + ny * (0 + nz * aC));
+            aInId = i + nx * (i + ny * (0 + nz * aT));
+            aExId = i + nx * (j + ny * (0 + nz * aB));
+            CId   = i + nx * (j + ny * 0);
         }
-
         
-        if (type == 0 || type == 1) { // "wall" or "inlet"
-            uCoef[id_aC] -= 2 * uCoef[id_aOut];
-            uCoef[id_aIn] += uCoef[id_aOut] / 3;
-            uSrcTerm[id_b] -= (scalar)8/3 * uCoef[id_aOut] * uBC;
-            uCoef[id_aOut] = 0;
+        if constexpr (bcType == wall || bcType == inlet) { // "wall" or "inlet"
+            uCoef[aCId] -= 2 * uCoef[aExId];
+            uCoef[aInId] += uCoef[aExId] / 3;
+            uSrcTerm[CId] -= (scalar)8/3 * uCoef[aExId] * uBC;
+            uCoef[aExId] = 0;
 
-            vCoef[id_aC] -= 2 * vCoef[id_aOut];
-            vCoef[id_aIn] += vCoef[id_aOut] / 3;
-            vSrcTerm[id_b] -= (scalar)8/3 * vCoef[id_aOut] * vBC;
-            vCoef[id_aOut] = 0;
+            vCoef[aCId] -= 2 * vCoef[aExId];
+            vCoef[aInId] += vCoef[aExId] / 3;
+            vSrcTerm[CId] -= (scalar)8/3 * vCoef[aExId] * vBC;
+            vCoef[aExId] = 0;
 
-            if (dim == 3) {
-                wCoef[id_aC] -= 2 * wCoef[id_aOut];
-                wCoef[id_aIn] += wCoef[id_aOut] / 3;
-                wSrcTerm[id_b] -= (scalar)8/3 * wCoef[id_aOut] * wBC;
-                wCoef[id_aOut] = 0;
+            if constexpr (dim == 3) {
+                wCoef[aCId] -= 2 * wCoef[aExId];
+                wCoef[aInId] += wCoef[aExId] / 3;
+                wSrcTerm[CId] -= (scalar)8/3 * wCoef[aExId] * wBC;
+                wCoef[aExId] = 0;
             }
-        } else if (type == 2) { // "outlet"
-            uCoef[id_aC] += uCoef[id_aOut];
-            uCoef[id_aOut] = 0;
+        } else if constexpr (bcType == 2) { // "outlet"
+            uCoef[aCId] += uCoef[aExId];
+            uCoef[aExId] = 0;
 
-            vCoef[id_aC] += vCoef[id_aOut];
-            vCoef[id_aOut] = 0;
+            vCoef[aCId] += vCoef[aExId];
+            vCoef[aExId] = 0;
 
-            if (dim == 3) {
-                wCoef[id_aC] += wCoef[id_aOut];
-                wCoef[id_aOut] = 0;
+            if constexpr (dim == 3) {
+                wCoef[aCId] += wCoef[aExId];
+                wCoef[aExId] = 0;
             }
         }
     }
@@ -434,36 +540,42 @@ void applyBCsToMomEq(scalar *uCoef_dev, scalar *uSrcTerm_dev, scalar *vCoef_dev,
     dim3 threadsPerBlock;
     dim3 numBlocks;
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(1024, 1, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(32, 32, 1);
     }
 
     numBlocks.x = (ny + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = 1;
-    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
-        , wSrcTerm_dev, east, velBCs::type[east], velBCs::val[east][0], velBCs::val[east][1], velBCs::val[east][2]);
-    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
-        , wSrcTerm_dev, west, velBCs::type[west], velBCs::val[west][0], velBCs::val[west][1], velBCs::val[west][2]);
+
+    applyBCsToMomEqKernel<east, velBCs::type[east]><<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uCoef_dev, vCoef_dev, wCoef_dev
+        , uSrcTerm_dev, vSrcTerm_dev, wSrcTerm_dev, velBCs::val[east][0], velBCs::val[east][1], velBCs::val[east][2]);
+
+    applyBCsToMomEqKernel<west, velBCs::type[west]><<<numBlocks, threadsPerBlock, 0, stream[1]>>>(uCoef_dev, vCoef_dev, wCoef_dev
+        , uSrcTerm_dev, vSrcTerm_dev, wSrcTerm_dev, velBCs::val[west][0], velBCs::val[west][1], velBCs::val[west][2]);
 
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = 1;
-    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
-        , wSrcTerm_dev, north, velBCs::type[north], velBCs::val[north][0], velBCs::val[north][1], velBCs::val[north][2]);
-    applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[3]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
-        , wSrcTerm_dev, south, velBCs::type[south], velBCs::val[south][0], velBCs::val[south][1], velBCs::val[south][2]);
 
-    if (dim == 3) {
+    applyBCsToMomEqKernel<north, velBCs::type[north]><<<numBlocks, threadsPerBlock, 0, stream[2]>>>(uCoef_dev, vCoef_dev, wCoef_dev
+        , uSrcTerm_dev, vSrcTerm_dev, wSrcTerm_dev, velBCs::val[north][0], velBCs::val[north][1], velBCs::val[north][2]);
+
+    applyBCsToMomEqKernel<south, velBCs::type[south]><<<numBlocks, threadsPerBlock, 0, stream[3]>>>(uCoef_dev, vCoef_dev, wCoef_dev
+        , uSrcTerm_dev, vSrcTerm_dev, wSrcTerm_dev, velBCs::val[south][0], velBCs::val[south][1], velBCs::val[south][2]);
+
+    if constexpr (dim == 3) {
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
         numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
         numBlocks.z = 1;
-        applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[4]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
-            , wSrcTerm_dev, top, velBCs::type[top], velBCs::val[top][0], velBCs::val[top][1], velBCs::val[top][2]);
-        applyBCsToMomEqKernel<<<numBlocks, threadsPerBlock, 0, stream[5]>>>(uCoef_dev, vCoef_dev, wCoef_dev, uSrcTerm_dev, vSrcTerm_dev
-            , wSrcTerm_dev, bottom, velBCs::type[bottom], velBCs::val[bottom][0], velBCs::val[bottom][1], velBCs::val[bottom][2]);
+
+        applyBCsToMomEqKernel<top, velBCs::type[top]><<<numBlocks, threadsPerBlock, 0, stream[4]>>>(uCoef_dev, vCoef_dev, wCoef_dev
+            , uSrcTerm_dev, vSrcTerm_dev, wSrcTerm_dev, velBCs::val[top][0], velBCs::val[top][1], velBCs::val[top][2]);
+
+        applyBCsToMomEqKernel<bottom, velBCs::type[bottom]><<<numBlocks, threadsPerBlock, 0, stream[5]>>>(uCoef_dev, vCoef_dev, wCoef_dev
+            , uSrcTerm_dev, vSrcTerm_dev, wSrcTerm_dev, velBCs::val[bottom][0], velBCs::val[bottom][1], velBCs::val[bottom][2]);
     }
 
     for (int i = 0; i < 2*dim; ++i) {
@@ -485,19 +597,20 @@ __global__ void pointJacobiIterateKernel(scalar *field, scalar* field0, scalar *
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int id_C = i + nx * (j + ny * k);
-        scalar phi_C = field0[id_C];
+
+        int CId = i + nx * (j + ny * k);
+        scalar phi_C = field0[CId];
         // east
         scalar phi_E = 0;
         if ( i != nx - 1 ) {
-            int id_E = i+1 + nx * (j + ny * k);
-            phi_E = field0[id_E];
+            int EId = i+1 + nx * (j + ny * k);
+            phi_E = field0[EId];
         }
         // west
         scalar phi_W = 0;
         if ( i != 0 ) {
-            int id_W = i-1 + nx * (j + ny * k);
-            phi_W = field0[id_W];
+            int WId = i-1 + nx * (j + ny * k);
+            phi_W = field0[WId];
         }
         // north
         scalar phi_N = 0;
@@ -524,19 +637,19 @@ __global__ void pointJacobiIterateKernel(scalar *field, scalar* field0, scalar *
             phi_B = field0[id_B];
         }
         
-        scalar newPhi = srcTerm[id_C]
+        scalar newPhi = srcTerm[CId]
             - coef[i+nx*(j+ny*(k+nz*aE))] * phi_E
             - coef[i+nx*(j+ny*(k+nz*aW))] * phi_W
             - coef[i+nx*(j+ny*(k+nz*aN))] * phi_N
             - coef[i+nx*(j+ny*(k+nz*aS))] * phi_S;
-        if (dim == 3) {
+        if constexpr (dim == 3) {
             newPhi -= coef[i+nx*(j+ny*(k+nz*aT))] * phi_T + coef[i+nx*(j+ny*(k+aB))] * phi_B;
         }
         newPhi /= coef[i+nx*(j+ny*(k+nz*aC))];
 
         scalar dPhi = relax * (newPhi - phi_C);
 
-        field[id_C] = phi_C + dPhi;
+        field[CId] = phi_C + dPhi;
 
         sharedNorm[tid] = dPhi*dPhi;
         __syncthreads();
@@ -567,9 +680,9 @@ void pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, s
     dim3 threadsPerBlock;
     dim3 numBlocks;
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 16, 8);
     }
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
@@ -620,19 +733,20 @@ __global__ void GaussSeidelIterateKernel(scalar *field, scalar *coef, scalar *sr
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int id_C = i + nx * (j + ny * k);
-        scalar phi_C = field[id_C];
+
+        int CId = i + nx * (j + ny * k);
+        scalar phi_C = field[CId];
         // east
         scalar phi_E = 0;
         if ( i != nx - 1 ) {
-            int id_E = i+1 + nx * (j + ny * k);
-            phi_E = field[id_E];
+            int EId = i+1 + nx * (j + ny * k);
+            phi_E = field[EId];
         }
         // west
         scalar phi_W = 0;
         if ( i != 0 ) {
-            int id_W = i-1 + nx * (j + ny * k);
-            phi_W = field[id_W];
+            int WId = i-1 + nx * (j + ny * k);
+            phi_W = field[WId];
         }
         // north
         scalar phi_N = 0;
@@ -659,19 +773,19 @@ __global__ void GaussSeidelIterateKernel(scalar *field, scalar *coef, scalar *sr
             phi_B = field[id_B];
         }
         
-        scalar newPhi = srcTerm[id_C]
+        scalar newPhi = srcTerm[CId]
             - coef[i+nx*(j+ny*(k+aE))] * phi_E
             - coef[i+nx*(j+ny*(k+aW))] * phi_W
             - coef[i+nx*(j+ny*(k+aN))] * phi_N
             - coef[i+nx*(j+ny*(k+aS))] * phi_S;
-        if (dim == 3) {
+        if constexpr (dim == 3) {
             newPhi -= coef[i+nx*(j+ny*(k+aT))] * phi_T + coef[i+nx*(j+ny*(k+aB))] * phi_B;
         }
         newPhi /= coef[i+nx*(j+ny*(k+aC))];
 
         scalar dPhi = relax * (newPhi - phi_C);
 
-        field[id_C] = phi_C + dPhi;
+        field[CId] = phi_C + dPhi;
 
         sharedNorm[tid] = dPhi*dPhi;
         __syncthreads();
@@ -698,9 +812,9 @@ void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev
     dim3 threadsPerBlock;
     dim3 numBlocks;
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 16, 8);
     }
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
@@ -736,186 +850,246 @@ void GaussSeidelIterate(scalar *field_dev, scalar *coef_dev, scalar *srcTerm_dev
     cudaFree(norm_dev);
 }
 
-__global__ void RhieChowInterpolateUfKernel(scalar *uf, scalar *u, scalar *uCoef, scalar *p, int typeW, int typeE) {
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (i < nx && j < ny && k < nz) {
-        int id_c  = i   + (nx+1) * (j + ny * k);
-        int id_WW = i-2 + nx     * (j + ny * k);
-        int id_W  = i-1 + nx     * (j + ny * k);
-        int id_E  = i   + nx     * (j + ny * k);
-        int id_EE = i+1 + nx     * (j + ny * k);
-
-        scalar u_W = u[id_W];
-        scalar u_E = u[id_E];
-
-        scalar aC_W = uCoef[i-1 + nx * (j + ny * (k + nz * aC))];
-        scalar aC_E = uCoef[i   + nx * (j + ny * (k + nz * aC))];
-
-        scalar p_WW, p_W, p_E, p_EE;
-        p_W = p[id_W];
-        p_E = p[id_E];
-        if (i == 1) {
-            if (typeW == 0 || typeW == 1) { // "wall" or "inlet"
-                p_WW = p_W;
-            } else if (typeW == 2) { // "outlet"
-                p_WW = 0;
-            }
-        } else {
-            p_WW = p[id_WW];
-        }
-        if (i == nx - 1) {
-            if (typeE == 0 || typeE == 1) { // "wall" or "inlet"
-                p_EE = p_E;
-            } else if (typeE == 2) { // "outlet"
-                p_EE = 0;
-            }
-        } else {
-            p_EE = p[id_EE];
-        }
-
-        uf[id_c] = 0.5 * (u_W + u_E) + (p_E - p_WW) * areaX / (4 * aC_W) + (p_EE - p_W) * areaX / (4 * aC_E)
-                 + 0.5 * (1/aC_W + 1/aC_E) * (p_W - p_E) * areaX;
-    }
-}
-
-__global__ void RhieChowInterpolateVfKernel(scalar *vf, scalar *v, scalar *vCoef, scalar *p, int typeS, int typeN) {
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (i < nx && j < ny && k < nz) {
-        int id_c  = i + nx * (j   + (ny+1) * k);
-        int id_SS = i + nx * (j-2 + ny     * k);
-        int id_S  = i + nx * (j-1 + ny     * k);
-        int id_N  = i + nx * (j   + ny     * k);
-        int id_NN = i + nx * (j+1 + ny     * k);
-
-        scalar v_S = v[id_S];
-        scalar v_N = v[id_N];
-
-        scalar aC_S = vCoef[i + nx * (j-1 + ny * (k + nz * aC))];
-        scalar aC_N = vCoef[i + nx * (j   + ny * (k + nz * aC))];
-
-        scalar p_SS, p_S, p_N, p_NN;
-        p_S = p[id_S];
-        p_N = p[id_N];
-        if (j == 1) {
-            if (typeS == 0 || typeS == 1) { // "wall" or "inlet"
-                p_SS = p_S;
-            } else if (typeS == 2) { // "outlet"
-                p_SS = 0;
-            }
-        } else {
-            p_SS = p[id_SS];
-        }
-        if (j == ny - 1) {
-            if (typeN == 0 || typeN == 1) { // "wall" or "inlet"
-                p_NN = p_N;
-            } else if (typeN == 2) { // "outlet"
-                p_NN = 0;
-            }
-        } else {
-            p_NN = p[id_NN];
-        }
-
-        vf[id_c] = 0.5 * (v_S + v_N) + (p_N - p_SS) * areaY / (4 * aC_S) + (p_NN - p_S) * areaY / (4 * aC_N)
-                 + 0.5 * (1/aC_S + 1/aC_N) * (p_S - p_N) * areaY;
-    }
-}
-
-__global__ void RhieChowInterpolateWfKernel(scalar *wf, scalar *w, scalar *wCoef, scalar *p, int typeB, int typeT) {
+template<int dir>
+__global__ void interiorRhieChowInterpolateKernel(scalar *uf, scalar *u, scalar *coef, scalar *p) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z + 1;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
 
-    if (i < nx && j < ny && k < nz) {
-        int id_c  = i + nx * (j + ny * k  );
-        int id_BB = i + nx * (j + ny * k-2);
-        int id_B  = i + nx * (j + ny * k-1);
-        int id_T  = i + nx * (j + ny * k  );
-        int id_TT = i + nx * (j + ny * k+1);
+    bool loopFlag;
 
-        scalar w_B = w[id_B];
-        scalar w_T = w[id_T];
+    if constexpr (dir == xDir) {
+        ++(++i);
+        loopFlag = (i < nx-1 && j < ny && k < nz);
+    } else if constexpr (dir == yDir) {
+        ++(++j);
+        loopFlag = (i < nx && j < ny-1 && k < nz);
+    } else if constexpr (dir == zDir) {
+        ++(++k);
+        loopFlag = (i < nx && j < ny && k < nz-1);
+    }
 
-        scalar aC_B = wCoef[i + nx * (j + ny * (k-1 + nz * aC))];
-        scalar aC_T = wCoef[i + nx * (j + ny * (k   + nz * aC))];
+    if (loopFlag) {
 
-        scalar p_BB, p_B, p_T, p_TT;
-        p_B = p[id_B];
-        p_T = p[id_T];
-        if (k == 1) {
-            if (typeB == 0 || typeB == 1) { // "wall" or "inlet"
-                p_BB = p_B;
-            } else if (typeB == 2) { // "outlet"
-                p_BB = 0;
-            }
-        } else {
-            p_BB = p[id_BB];
+        int cId, LLId, LId, RId, RRId;
+        scalar aC_L, aC_R;
+        scalar area;
+
+        if constexpr (dir == xDir) {
+            cId  = i   + (nx+1) * (j + ny * k);
+            LLId = i-2 + nx     * (j + ny * k);
+            LId  = i-1 + nx     * (j + ny * k);
+            RId  = i   + nx     * (j + ny * k);
+            RRId = i+1 + nx     * (j + ny * k);
+            aC_L = coef[i-1 + nx * (j + ny * (k + nz * aC))];
+            aC_R = coef[i   + nx * (j + ny * (k + nz * aC))];
+            area = areaX;
+        } else if constexpr (dir == yDir) {
+            cId  = i + nx * (j   + (ny+1) * k);
+            LLId = i + nx * (j-2 + ny     * k);
+            LId  = i + nx * (j-1 + ny     * k);
+            RId  = i + nx * (j   + ny     * k);
+            RRId = i + nx * (j+1 + ny     * k);
+            aC_L = coef[i + nx * (j-1 + ny * (k + nz * aC))];
+            aC_R = coef[i + nx * (j   + ny * (k + nz * aC))];
+            area = areaY;
+        } else if constexpr (dir == zDir) {
+            cId  = i + nx * (j + ny * k    );
+            LLId = i + nx * (j + ny * (k-2));
+            LId  = i + nx * (j + ny * (k-1));
+            RId  = i + nx * (j + ny * k    );
+            RRId = i + nx * (j + ny * (k+1));
+            aC_L = coef[i + nx * (j + ny * (k-1 + nz * aC))];
+            aC_R = coef[i + nx * (j + ny * (k   + nz * aC))];
+            area = areaZ;
         }
-        if (k == nz - 1) {
-            if (typeT == 0 || typeT == 1) { // "wall" or "inlet"
-                p_TT = p_T;
-            } else if (typeT == 2) { // "outlet"
-                p_TT = 0;
-            }
-        } else {
-            p_TT = p[id_TT];
+
+        scalar u_L = u[LId];
+        scalar u_R = u[RId];
+
+        uf[cId] = 0.5 * (u_L + u_R) + (p[RId] - p[LLId]) * area / (4 * aC_L) + (p[RRId] - p[LId]) * area / (4 * aC_R)
+                + 0.5 * (1/aC_L + 1/aC_R) * (p[LId] - p[RId]) * area;
+    }
+}
+
+template<int loc, int bcType>
+__global__ void bcRhieChowInterpolateKernel(scalar *uf, scalar *u, scalar *coef, scalar *p) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+    bool loopFlag;
+
+    if constexpr (loc == west || loc == east) {
+        loopFlag = (i < ny && j < nz);
+    } else if constexpr (loc == south || loc == north) {
+        loopFlag = (i < nx && j < nz);
+    }  else if constexpr (loc == bottom || loc == top) {
+        loopFlag = (i < nx && j < ny);
+    }
+
+    if (loopFlag) {
+
+        int cId, LLId, LId, RId, RRId;
+        scalar aC_L, aC_R;
+
+        if constexpr (loc == west) {
+            cId  = 1 + (nx+1) * (i + ny * j);
+            LId  = 0 + nx     * (i + ny * j);
+            RId  = 1 + nx     * (i + ny * j);
+            RRId = 2 + nx     * (i + ny * j);
+            aC_L = coef[0 + nx * (i + ny * (j + nz * aC))];
+            aC_R = coef[1 + nx * (i + ny * (j + nz * aC))];
+        } else if constexpr (loc == east) {
+            cId  = nx-1 + (nx+1) * (i + ny * j);
+            LLId = nx-3 + nx     * (i + ny * j);
+            LId  = nx-2 + nx     * (i + ny * j);
+            RId  = nx-1 + nx     * (i + ny * j);
+            aC_L = coef[nx-2 + nx * (i + ny * (j + nz * aC))];
+            aC_R = coef[nx-1 + nx * (i + ny * (j + nz * aC))];
+        } else if constexpr (loc == south) {
+            cId  = i + nx * (1 + (ny+1) * j);
+            LId  = i + nx * (0 + ny     * j);
+            RId  = i + nx * (1 + ny     * j);
+            RRId = i + nx * (2 + ny     * j);
+            aC_L = coef[i + nx * (0 + ny * (j + nz * aC))];
+            aC_R = coef[i + nx * (1 + ny * (j + nz * aC))];
+        } else if constexpr (loc == north) {
+            cId  = i + nx * (ny-1 + (ny+1) * j);
+            LLId = i + nx * (ny-3 + ny     * j);
+            LId  = i + nx * (ny-2 + ny     * j);
+            RId  = i + nx * (ny-1 + ny     * j);
+            aC_L = coef[i + nx * (ny-2 + ny * (j + nz * aC))];
+            aC_R = coef[i + nx * (ny-1 + ny * (j + nz * aC))];
+        } else if constexpr (loc == bottom) {
+            cId  = i + nx * (j + ny * 1);
+            LId  = i + nx * (j + ny * 0);
+            RId  = i + nx * (j + ny * 1);
+            RRId = i + nx * (j + ny * 2);
+            aC_L = coef[i + nx * (j + ny * (0 + nz * aC))];
+            aC_R = coef[i + nx * (j + ny * (1 + nz * aC))];
+        } else if constexpr (loc == top) {
+            cId  = i + nx * (j + ny * (nz-1));
+            LLId = i + nx * (j + ny * (nz-3));
+            LId  = i + nx * (j + ny * (nz-2));
+            RId  = i + nx * (j + ny * (nz-1));
+            aC_L = coef[i + nx * (j + ny * (nz-2 + nz * aC))];
+            aC_R = coef[i + nx * (j + ny * (nz-1 + nz * aC))];
         }
 
-        wf[id_c] = 0.5 * (w_B + w_T) + (p_T - p_BB) * areaZ / (4 * aC_B) + (p_TT - p_B) * areaZ / (4 * aC_T)
-                 + 0.5 * (1/aC_B + 1/aC_T) * (p_B - p_T) * areaZ;
+        scalar area;
+
+        if constexpr (loc == west || loc == east) {
+            area = areaX;
+        } else if constexpr (loc == south || loc == north) {
+            area = areaY;
+        } else if constexpr (loc == bottom || loc == top) {
+            area = areaZ;
+        }
+
+        scalar u_L = u[LId];
+        scalar u_R = u[RId];
+
+        scalar p_LL, p_L, p_R, p_RR;
+        p_L = p[LId];
+        p_R = p[RId];
+
+        if constexpr (loc == west || loc == south || loc == bottom) {
+            if constexpr (bcType == wall || bcType == inlet) {
+                p_LL = p_L;
+            } else if constexpr (bcType == outlet) {
+                p_LL = 0;
+            }
+            p_RR = p[RRId];
+        } else if constexpr (loc == east || loc == north || loc == top) {
+            if constexpr (bcType == wall || bcType == inlet) {
+                p_RR = p_R;
+            } else if constexpr (bcType == outlet) {
+                p_RR = 0;
+            }
+            p_LL = p[LLId];
+        }
+
+        uf[cId] = 0.5 * (u_L + u_R) + (p_R - p_LL) * area / (4 * aC_L) + (p_RR - p_L) * area / (4 * aC_R)
+                + 0.5 * (1/aC_L + 1/aC_R) * (p_L - p_R) * area;
     }
 }
 
 void RhieChowInterpolate(scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *u_dev, scalar *v_dev, scalar *w_dev
     , scalar *uCoef_dev, scalar *vCoef_dev, scalar *wCoef_dev, scalar *p_dev) {
 
-    cudaStream_t stream[dim];
-    for (int i = 0; i < dim; ++i) {
+    cudaStream_t stream[3*dim];
+    for (int i = 0; i < 3*dim; ++i) {
         cudaStreamCreate(&stream[i]);
     }
 
     dim3 threadsPerBlock;
     dim3 numBlocks;
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 8, 8);
     }
 
-    numBlocks.x = (nx - 1 + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.x = (nx - 3 + threadsPerBlock.x - 1) / threadsPerBlock.x;
     numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    RhieChowInterpolateUfKernel<<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uf_dev, u_dev, uCoef_dev, p_dev
-        , velBCs::type[west], velBCs::type[east]);
+
+    interiorRhieChowInterpolateKernel<xDir><<<numBlocks, threadsPerBlock, 0, stream[0]>>>(uf_dev, u_dev, uCoef_dev, p_dev);
 
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
-    numBlocks.y = (ny - 1 + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.y = (ny - 3 + threadsPerBlock.y - 1) / threadsPerBlock.y;
     numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
-    RhieChowInterpolateVfKernel<<<numBlocks, threadsPerBlock, 0, stream[1]>>>(vf_dev, v_dev, vCoef_dev, p_dev
-        , velBCs::type[south], velBCs::type[north]);
 
-    if (dim == 3) {
+    interiorRhieChowInterpolateKernel<yDir><<<numBlocks, threadsPerBlock, 0, stream[1]>>>(vf_dev, v_dev, vCoef_dev, p_dev);
+
+    if constexpr (dim == 3) {
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
         numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
-        numBlocks.z = (nz - 1 + threadsPerBlock.z - 1) / threadsPerBlock.z;
-        RhieChowInterpolateWfKernel<<<numBlocks, threadsPerBlock, 0, stream[2]>>>(wf_dev, w_dev, wCoef_dev, p_dev
-            , velBCs::type[bottom], velBCs::type[top]);
+        numBlocks.z = (nz - 3 + threadsPerBlock.z - 1) / threadsPerBlock.z;
+
+        interiorRhieChowInterpolateKernel<zDir><<<numBlocks, threadsPerBlock, 0, stream[6]>>>(wf_dev, w_dev, wCoef_dev, p_dev);
     }
 
-    for (int i = 0; i < dim; ++i) {
+    if constexpr (dim == 2) {
+        threadsPerBlock = dim3(1024, 1, 1);
+    } else if constexpr (dim == 3) {
+        threadsPerBlock = dim3(32, 32, 1);
+    }
+
+    numBlocks.x = (ny + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    bcRhieChowInterpolateKernel<west, velBCs::type[west]><<<numBlocks, threadsPerBlock, 0, stream[2]>>>(uf_dev, u_dev, uCoef_dev, p_dev);
+
+    bcRhieChowInterpolateKernel<east, velBCs::type[east]><<<numBlocks, threadsPerBlock, 0, stream[3]>>>(uf_dev, u_dev, uCoef_dev, p_dev);
+
+    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    bcRhieChowInterpolateKernel<south, velBCs::type[south]><<<numBlocks, threadsPerBlock, 0, stream[4]>>>(vf_dev, v_dev, vCoef_dev, p_dev);
+
+    bcRhieChowInterpolateKernel<north, velBCs::type[north]><<<numBlocks, threadsPerBlock, 0, stream[5]>>>(vf_dev, v_dev, vCoef_dev, p_dev);
+
+    if constexpr (dim == 3) {
+        numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+        numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
+        numBlocks.z = 1;
+
+        bcRhieChowInterpolateKernel<bottom, velBCs::type[bottom]><<<numBlocks, threadsPerBlock, 0, stream[7]>>>(wf_dev, w_dev, wCoef_dev, p_dev);
+
+        bcRhieChowInterpolateKernel<top, velBCs::type[top]><<<numBlocks, threadsPerBlock, 0, stream[8]>>>(wf_dev, w_dev, wCoef_dev, p_dev);
+    }
+
+    for (int i = 0; i < 3*dim; ++i) {
         cudaStreamSynchronize(stream[i]);
     }
 
-    for (int i = 0; i < dim; ++i) {
+    for (int i = 0; i < 3*dim; ++i) {
         cudaStreamDestroy(stream[i]);
     }
 }
@@ -927,35 +1101,35 @@ __global__ void calcPresCorrLinkCoefKernel(scalar *pCorrCoef, scalar *uCoef, sca
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int id_aC = i+nx*(j+ny*(k+nz*aC));
-        int id_aE = i+nx*(j+ny*(k+nz*aE));
-        int id_aW = i+nx*(j+ny*(k+nz*aW));
-        int id_aN = i+nx*(j+ny*(k+nz*aN));
-        int id_aS = i+nx*(j+ny*(k+nz*aS));
-        int id_aT = i+nx*(j+ny*(k+nz*aT));
-        int id_aB = i+nx*(j+ny*(k+nz*aB));
+        int aCId = i+nx*(j+ny*(k+nz*aC));
+        int aEId = i+nx*(j+ny*(k+nz*aE));
+        int aWId = i+nx*(j+ny*(k+nz*aW));
+        int aNId = i+nx*(j+ny*(k+nz*aN));
+        int aSId = i+nx*(j+ny*(k+nz*aS));
+        int aTId = i+nx*(j+ny*(k+nz*aT));
+        int aBId = i+nx*(j+ny*(k+nz*aB));
 
         if (i < nx - 1) {
-            pCorrCoef[id_aE] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+nz*aC))] + 1/uCoef[i+1+nx*(j+ny*(k+nz*aC))]);
+            pCorrCoef[aEId] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+nz*aC))] + 1/uCoef[i+1+nx*(j+ny*(k+nz*aC))]);
         }
         if (i > 0) {
-            pCorrCoef[id_aW] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+nz*aC))] + 1/uCoef[i-1+nx*(j+ny*(k+nz*aC))]);
+            pCorrCoef[aWId] = -0.5 * density * areaX * areaX * (1/uCoef[i+nx*(j+ny*(k+nz*aC))] + 1/uCoef[i-1+nx*(j+ny*(k+nz*aC))]);
         }
         if (j < ny -1) {
-            pCorrCoef[id_aN] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+nz*aC))] + 1/vCoef[i+nx*(j+1+ny*(k+nz*aC))]);
+            pCorrCoef[aNId] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+nz*aC))] + 1/vCoef[i+nx*(j+1+ny*(k+nz*aC))]);
         }
         if (j > 0) {
-            pCorrCoef[id_aS] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+nz*aC))] + 1/vCoef[i+nx*(j-1+ny*(k+nz*aC))]);
+            pCorrCoef[aSId] = -0.5 * density * areaY * areaY * (1/vCoef[i+nx*(j+ny*(k+nz*aC))] + 1/vCoef[i+nx*(j-1+ny*(k+nz*aC))]);
         }
-        pCorrCoef[id_aC] = -(pCorrCoef[id_aE] + pCorrCoef[id_aW] + pCorrCoef[id_aN] + pCorrCoef[id_aS]);
-        if (dim == 3) {
+        pCorrCoef[aCId] = -(pCorrCoef[aEId] + pCorrCoef[aWId] + pCorrCoef[aNId] + pCorrCoef[aSId]);
+        if constexpr (dim == 3) {
             if (k < nz - 1) {
                 pCorrCoef[i+nx*(j+ny*(k+aT))] = -0.5 * density * areaZ * areaZ * (1/wCoef[i+nx*(j+ny*(k+nz*aC))] + 1/wCoef[i+nx*(j+ny*(k+1+nz*aC))]);
             }
             if (k > 0) {
                 pCorrCoef[i+nx*(j+ny*(k+aB))] = -0.5 * density * areaZ * areaZ * (1/wCoef[i+nx*(j+ny*(k+nz*aC))] + 1/wCoef[i+nx*(j+ny*(k-1+nz*aC))]);
             }
-            pCorrCoef[id_aC] += -(pCorrCoef[id_aT] + pCorrCoef[id_aB]);
+            pCorrCoef[aCId] += -(pCorrCoef[aTId] + pCorrCoef[aBId]);
         }
     }
 }
@@ -965,9 +1139,9 @@ void calcPresCorrLinkCoef(scalar *pCorrCoef_dev, scalar *uCoef_dev, scalar *vCoe
     dim3 threadsPerBlock;
     dim3 numBlocks; 
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 8, 8);
     }
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
@@ -986,18 +1160,18 @@ __global__ void calcPresCorrSrcTermKernel(scalar *pCorrSrcTerm, scalar *uf, scal
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < nx && j < ny && k < nz) {
-        int id_C = i   + nx     * (j   + ny     * k);
-        int id_e = i+1 + (nx+1) * (j   + ny     * k);
-        int id_w = i   + (nx+1) * (j   + ny     * k);
-        int id_n = i   + nx     * (j+1 + (ny+1) * k);
-        int id_s = i   + nx     * (j   + (ny+1) * k);
+        int CId = i   + nx     * (j   + ny     * k);
+        int eId = i+1 + (nx+1) * (j   + ny     * k);
+        int wId = i   + (nx+1) * (j   + ny     * k);
+        int nId = i   + nx     * (j+1 + (ny+1) * k);
+        int sId = i   + nx     * (j   + (ny+1) * k);
 
-        pCorrSrcTerm[id_C] = density * (areaX * (uf[id_w] - uf[id_e]) + areaY * (vf[id_s] - vf[id_n]));
+        pCorrSrcTerm[CId] = density * (areaX * (uf[wId] - uf[eId]) + areaY * (vf[sId] - vf[nId]));
         if (dim == 3) {
-            int id_t = i + nx * (j + ny * (k+1));
-            int id_b = i + nx * (j + ny * k    );
+            int tId = i + nx * (j + ny * (k+1));
+            int bId = i + nx * (j + ny * k    );
 
-            pCorrSrcTerm[id_C] += density * areaZ * (wf[id_b] - wf[id_t]);
+            pCorrSrcTerm[CId] += density * areaZ * (wf[bId] - wf[tId]);
         }
     }
 }
@@ -1007,9 +1181,9 @@ void calcPresCorrSrcTerm(scalar *pCorrSrcTerm_dev, scalar *uf_dev, scalar *vf_de
     dim3 threadsPerBlock;
     dim3 numBlocks; 
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 8, 8);
     }
     numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
@@ -1021,8 +1195,8 @@ void calcPresCorrSrcTerm(scalar *pCorrSrcTerm_dev, scalar *uf_dev, scalar *vf_de
     cudaDeviceSynchronize();
 }
 
-__global__ void updateVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar *norm, int dir, int typeOnMin, int typeOnMax
-    , scalar relax) {
+template<int dir>
+__global__ void updateInteriorVelKernel(scalar *u, scalar *coef, scalar *pCorr, scalar *norm, scalar relax) {
 
     extern __shared__ scalar sharedNorm[];
 
@@ -1031,52 +1205,48 @@ __global__ void updateVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
-    if (i < nx && j < ny && k < nz) {
-        int id_C = i + nx * (j + ny * k);
-        int id_Prev, id_Next;
+    bool loopFlag;
+
+    if constexpr (dir == xDir) {
+        ++i;
+        loopFlag = (i < nx-1 && j < ny && k < nz);
+    } else if constexpr (dir == yDir) {
+        ++j;
+        loopFlag = (i < nx && j < ny-1 && k < nz);
+    } else if constexpr (dir == zDir) {
+        ++k;
+        loopFlag = (i < nx && j < ny && k < nz-1);
+    }
+
+    if (loopFlag) {
+
+        int CId = i + nx * (j + ny * k);
+        int LId, RId;
         scalar area;
-        if (dir == xDir) { // x-direction
-            id_Prev = i-1 + nx * (j + ny * k);
-            id_Next = i+1 + nx * (j + ny * k);
+
+        if constexpr (dir == xDir) {
+            LId = i-1 + nx * (j + ny * k);
+            RId = i+1 + nx * (j + ny * k);
             area = areaX;
-        } else if (dir == yDir) { // y-direction
-            id_Prev = i + nx * (j-1 + ny * k);
-            id_Next = i + nx * (j+1 + ny * k);
+        } else if constexpr (dir == yDir) {
+            LId = i + nx * (j-1 + ny * k);
+            RId = i + nx * (j+1 + ny * k);
             area = areaY;
-        } else if (dir == zDir) { // z-direction
-            id_Prev = i + nx * (j + ny * (k-1));
-            id_Next = i + nx * (j + ny * (k+1));
+        } else if constexpr (dir == zDir) {
+            LId = i + nx * (j + ny * (k-1));
+            RId = i + nx * (j + ny * (k+1));
             area = areaZ;
         }
 
-        scalar pCorr_Prev;
-        scalar pCorr_Next;
+        scalar pCorr_L = pCorr[LId];
+        scalar pCorr_R = pCorr[RId];
         scalar aC_C = coef[i+nx*(j+ny*(k+aC))];
 
-        if ((dir == xDir && i == 0) || (dir == yDir && j == 0) || (dir == zDir && k == 0)) {
-            if (typeOnMin == 0 || typeOnMin == 1) { // "wall" or "inlet"
-                pCorr_Prev = pCorr[id_C];
-            } else if (typeOnMin == 2) {
-                pCorr_Prev = 0;
-            }
-            pCorr_Next = pCorr[id_Next];
-        } else if ((dir == xDir && i == nx-1) || (dir == yDir && j == ny-1) || (dir == zDir && k == nz-1)) {
-            if (typeOnMax == 0 || typeOnMax == 1) { // "wall" or "inlet"
-                pCorr_Next = pCorr[id_C];
-            } else if (typeOnMax == 2) {
-                pCorr_Next = 0;
-            }
-            pCorr_Prev = pCorr[id_Prev];
-        } else {
-            pCorr_Prev = pCorr[id_Prev];
-            pCorr_Next = pCorr[id_Next];
-        }
+        scalar du = relax * 0.5 * (pCorr_L - pCorr_R) * area / aC_C;
 
-        scalar dvel = relax * 0.5 * (pCorr_Prev - pCorr_Next) * area / aC_C;
+        u[CId] += du;
 
-        vel[id_C] += dvel;
-
-        sharedNorm[tid] = dvel*dvel;
+        sharedNorm[tid] = du*du;
         __syncthreads();
 
         int stride = blockDim.x * blockDim.y * blockDim.z;
@@ -1093,7 +1263,107 @@ __global__ void updateVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar
     }
 }
 
-__global__ void updateFaceVelKernel(scalar *vel, scalar *coef, scalar *pCorr, scalar *norm, int dir, scalar relax) {
+template<int loc, int bcType>
+__global__ void updateBCVelKernel(scalar *u, scalar *coef, scalar *pCorr, scalar *norm, scalar relax) {
+
+    extern __shared__ scalar sharedNorm[];
+
+    int tid = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+    bool loopFlag;
+
+    if constexpr (loc == west || loc == east) {
+        loopFlag = (i < ny && j < nz);
+    } else if constexpr (loc == south || loc == north) {
+        loopFlag = (i < nx && j < nz);
+    } else if constexpr (loc == bottom || loc == top) {
+        loopFlag = (i < nx && j < ny);
+    }
+
+    if (loopFlag) {
+
+        int CId, LId, RId;
+        scalar aC_C;
+
+        if constexpr (loc == west) {
+            CId = 0 + nx * (i + ny * j);
+            RId = 1 + nx * (i + ny * j);
+            aC_C = coef[0+nx*(i+ny*(j+aC))];
+        } else if constexpr (loc == east) {
+            CId = nx-1 + nx * (i + ny * j);
+            LId = nx-2 + nx * (i + ny * j);
+            aC_C = coef[nx-1+nx*(i+ny*(j+aC))];
+        } else if constexpr (loc == south) {
+            CId = i + nx * (0 + ny * j);
+            RId = i + nx * (1 + ny * j);
+            aC_C = coef[i+nx*(0+ny*(j+aC))];
+        } else if constexpr (loc == north) {
+            CId = i + nx * (ny-1 + ny * j);
+            LId = i + nx * (ny-2 + ny * j);
+            aC_C = coef[i+nx*(ny-1+ny*(j+aC))];
+        } else if constexpr (loc == bottom) {
+            CId = i + nx * (j + ny * 0);
+            RId = i + nx * (j + ny * 1);
+            aC_C = coef[i+nx*(j+ny*(0+aC))];
+        } else if constexpr (loc == bottom) {
+            CId = i + nx * (j + ny * (nz-1));
+            LId = i + nx * (j + ny * (nz-2));
+            aC_C = coef[i+nx*(j+ny*(nz-1+aC))];
+        }
+
+        scalar area;
+
+        if constexpr (loc == west || loc == east) {
+            area = areaX;
+        } else if constexpr (loc == south || loc == north) {
+            area = areaY;
+        } else if constexpr (loc == bottom || loc == top) {
+            area = areaZ;
+        }
+
+        scalar pCorr_L, pCorr_R;
+
+        if constexpr (loc == west || loc == south || loc == bottom) {
+            if constexpr (bcType == wall || bcType == inlet) {
+                pCorr_L = pCorr[CId];
+            } else if constexpr (bcType == outlet) {
+                pCorr_L = 0;
+            }
+            pCorr_R = pCorr[RId];
+        } else if (loc == east || loc == north || loc == top) {
+            if constexpr (bcType == wall || bcType == inlet) {
+                pCorr_R = pCorr[CId];
+            } else if constexpr (bcType == outlet) {
+                pCorr_R = 0;
+            }
+            pCorr_L = pCorr[LId];
+        }
+
+        scalar du = relax * 0.5 * (pCorr_L - pCorr_R) * area / aC_C;
+
+        u[CId] += du;
+
+        sharedNorm[tid] = du*du;
+        __syncthreads();
+
+        int stride = blockDim.x * blockDim.y * blockDim.z;
+        for (int s = stride / 2; s > 0; s >>= 1) {
+            if (tid < s) {
+                sharedNorm[tid] += sharedNorm[tid + s];
+            }
+            __syncthreads();
+        }
+
+        if (tid == 0) {
+            atomicAdd(norm, sharedNorm[0]);
+        }
+    }
+}
+
+template<int dir>
+__global__ void updateFaceVelKernel(scalar *uf, scalar *coef, scalar *pCorr, scalar *norm, scalar relax) {
 
     extern __shared__ scalar sharedNorm[];
 
@@ -1102,42 +1372,44 @@ __global__ void updateFaceVelKernel(scalar *vel, scalar *coef, scalar *pCorr, sc
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
 
-    if ((dir == xDir && i < nx+1 && j < ny   && k < nz) ||
-        (dir == yDir && i < nx   && j < ny+1 && k < nz) ||
-        (dir == zDir && i < nx   && j < ny   && k < nz+1)) {
+    if constexpr (dir == xDir) {
+        ++i;
+    } else if constexpr (dir == yDir) {
+        ++j;
+    } else if constexpr (dir == zDir) {
+        ++k;
+    }
 
-        int id_c, id_Prev, id_Next;
+    if (i < nx && j < ny && k < nz) {
+
+        int cId, LId, RId;
         scalar area;
-        if (dir == xDir) { // x-direction
-            id_c    = i   + (nx+1) * (j + ny * k);
-            id_Prev = i-1 + nx     * (j + ny * k);
-            id_Next = i   + nx     * (j + ny * k);
+        if constexpr (dir == xDir) {
+            cId = i   + (nx+1) * (j + ny * k);
+            LId = i-1 + nx     * (j + ny * k);
+            RId = i   + nx     * (j + ny * k);
             area = areaX;
-        } else if (dir == yDir) { // y-direction
-            id_c    = i + nx * (j   + (ny+1) * k);
-            id_Prev = i + nx * (j-1 + ny     * k);
-            id_Next = i + nx * (j   + ny     * k);
+        } else if constexpr (dir == yDir) {
+            cId = i + nx * (j   + (ny+1) * k);
+            LId = i + nx * (j-1 + ny     * k);
+            RId = i + nx * (j   + ny     * k);
             area = areaY;
-        } else if (dir == zDir) { // z-direction
-            id_c    = i + nx * (j + ny * k    );
-            id_Prev = i + nx * (j + ny * (k-1));
-            id_Next = i + nx * (j + ny * k    );
+        } else if constexpr (dir == zDir) {
+            cId = i + nx * (j + ny * k    );
+            LId = i + nx * (j + ny * (k-1));
+            RId = i + nx * (j + ny * k    );
             area = areaZ;
         }
 
-        scalar dvel;
+        scalar duf;
 
-        if ((dir == xDir && (i == 0 || i == nx)) || (dir == yDir && (j == 0 || j == ny)) || (dir == zDir && (k == 0 || k == nz))) {
-            dvel = 0;
-        } else {
-            scalar aC_Prev = coef[id_Prev+nx*ny*nz*aC];
-            scalar aC_Next = coef[id_Next+nx*ny*nz*aC];
-            dvel = relax * 0.5 * (1/aC_Prev + 1/aC_Next) * (pCorr[id_Prev] - pCorr[id_Next]) * area;
-        }
+        scalar aC_L = coef[LId+nx*ny*nz*aC];
+        scalar aC_R = coef[RId+nx*ny*nz*aC];
+        duf = relax * 0.5 * (1/aC_L + 1/aC_R) * (pCorr[LId] - pCorr[RId]) * area;
 
-        vel[id_c] += dvel;
+        uf[cId] += duf;
 
-        sharedNorm[tid] = dvel*dvel;
+        sharedNorm[tid] = duf*duf;
         __syncthreads();
 
         int stride = blockDim.x * blockDim.y * blockDim.z;
@@ -1189,8 +1461,9 @@ void updateField(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uNorm_dev,
     , scalar *uf_dev, scalar *vf_dev, scalar *wf_dev, scalar *ufNorm_dev, scalar *vfNorm_dev, scalar *wfNorm_dev
     , scalar *p_dev, scalar *pNorm_dev, scalar *uCoef_dev, scalar *vCoef_dev, scalar *wCoef_dev, scalar *pCorr_dev) {
 
-    cudaStream_t stream[2*dim+1];
-    for (int i = 0; i < 2*dim+1; ++i) {
+    cudaStream_t stream[4*dim+1];
+
+    for (int i = 0; i < 4*dim+1; ++i) {
         cudaStreamCreate(&stream[i]);
     }
 
@@ -1199,17 +1472,17 @@ void updateField(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uNorm_dev,
     cudaMemsetAsync(vNorm_dev, 0, sizeof(scalar), stream[2]);
     cudaMemsetAsync(ufNorm_dev, 0, sizeof(scalar), stream[3]);
     cudaMemsetAsync(vfNorm_dev, 0, sizeof(scalar), stream[4]);
-    if (dim == 3) {
-        cudaMemsetAsync(wNorm_dev, 0, sizeof(scalar), stream[5]);
-        cudaMemsetAsync(wfNorm_dev, 0, sizeof(scalar), stream[6]);
+    if constexpr (dim == 3) {
+        cudaMemsetAsync(wNorm_dev, 0, sizeof(scalar), stream[9]);
+        cudaMemsetAsync(wfNorm_dev, 0, sizeof(scalar), stream[10]);
     }
 
     dim3 threadsPerBlock;
     dim3 numBlocks; 
 
-    if (dim == 2) {
+    if constexpr (dim == 2) {
         threadsPerBlock = dim3(32, 32, 1);
-    } else if (dim == 3) {
+    } else if constexpr (dim == 3) {
         threadsPerBlock = dim3(16, 8, 8);
     }
 
@@ -1221,47 +1494,95 @@ void updateField(scalar *u_dev, scalar *v_dev, scalar *w_dev, scalar *uNorm_dev,
 
     updatePresKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[0]>>>(p_dev, pCorr_dev, pNorm_dev, relax_p);
 
-    updateVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[1]>>>(u_dev, uCoef_dev, pCorr_dev, uNorm_dev
-        , xDir, velBCs::type[west], velBCs::type[east], relax_u);
+    numBlocks.x = (nx-2 + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny   + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz   + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    updateVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[2]>>>(v_dev, vCoef_dev, pCorr_dev, vNorm_dev
-        , yDir, velBCs::type[south], velBCs::type[north], relax_v);
+    updateInteriorVelKernel<xDir><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[1]>>>(u_dev, uCoef_dev, pCorr_dev
+        , uNorm_dev, relax_u);
 
-    numBlocks.x = (nx+1 + threadsPerBlock.x - 1) / threadsPerBlock.x;
-    numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
-    numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
+    numBlocks.x = (nx   + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny-2 + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz   + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    updateFaceVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[3]>>>(uf_dev, uCoef_dev, pCorr_dev
-        , ufNorm_dev, xDir, relax_u);
+    updateInteriorVelKernel<yDir><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[2]>>>(v_dev, vCoef_dev, pCorr_dev
+        , vNorm_dev, relax_v);
 
-    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
-    numBlocks.y = (ny+1 + threadsPerBlock.y - 1) / threadsPerBlock.y;
-    numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
+    numBlocks.x = (nx-1 + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny   + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz   + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-    updateFaceVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[4]>>>(vf_dev, vCoef_dev, pCorr_dev
-        , vfNorm_dev, yDir, relax_v);
+    updateFaceVelKernel<xDir><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[3]>>>(uf_dev, uCoef_dev, pCorr_dev
+        , ufNorm_dev, relax_u);
 
-    if (dim == 3) {
-        numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
-        numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
-        numBlocks.z = (nz + threadsPerBlock.z - 1) / threadsPerBlock.z;
+    numBlocks.x = (nx   + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (ny-1 + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = (nz   + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-        updateVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[5]>>>(w_dev, wCoef_dev, pCorr_dev, wNorm_dev
-            , zDir, velBCs::type[bottom], velBCs::type[top], relax_w);
+    updateFaceVelKernel<yDir><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[4]>>>(vf_dev, vCoef_dev, pCorr_dev
+        , vfNorm_dev, relax_v);
+
+    if constexpr (dim == 3) {
+        numBlocks.x = (nx   + threadsPerBlock.x - 1) / threadsPerBlock.x;
+        numBlocks.y = (ny   + threadsPerBlock.y - 1) / threadsPerBlock.y;
+        numBlocks.z = (nz-2 + threadsPerBlock.z - 1) / threadsPerBlock.z;
+
+        updateInteriorVelKernel<zDir><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[9]>>>(w_dev, wCoef_dev, pCorr_dev
+            , wNorm_dev, relax_w);
 
         numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
         numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
         numBlocks.z = (nz+1 + threadsPerBlock.z - 1) / threadsPerBlock.z;
 
-        updateFaceVelKernel<<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[6]>>>(wf_dev, wCoef_dev, pCorr_dev
-            , wfNorm_dev, zDir, relax_w);
+        updateFaceVelKernel<zDir><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[10]>>>(wf_dev, wCoef_dev, pCorr_dev
+            , wfNorm_dev, relax_w);
     }
 
-    for (int i = 0; i < 2*dim+1; ++i) {
+    if constexpr (dim == 2) {
+        threadsPerBlock = dim3(1024, 1, 1);
+    } else if constexpr (dim == 3) {
+        threadsPerBlock = dim3(32, 32, 1);
+    }
+
+    blockSize = threadsPerBlock.x * threadsPerBlock.y * threadsPerBlock.z;
+
+    numBlocks.x = (ny + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    updateBCVelKernel<west, velBCs::type[west]><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[5]>>>(u_dev, uCoef_dev, pCorr_dev
+        , uNorm_dev, relax_u);
+
+    updateBCVelKernel<east, velBCs::type[east]><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[6]>>>(u_dev, uCoef_dev, pCorr_dev
+        , uNorm_dev, relax_u);
+
+    numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+    numBlocks.y = (nz + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    numBlocks.z = 1;
+
+    updateBCVelKernel<south, velBCs::type[south]><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[7]>>>(v_dev, vCoef_dev, pCorr_dev
+        , vNorm_dev, relax_v);
+
+    updateBCVelKernel<north, velBCs::type[north]><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[8]>>>(v_dev, vCoef_dev, pCorr_dev
+        , vNorm_dev, relax_v);
+
+    if constexpr (dim == 3) {
+        numBlocks.x = (nx + threadsPerBlock.x - 1) / threadsPerBlock.x;
+        numBlocks.y = (ny + threadsPerBlock.y - 1) / threadsPerBlock.y;
+        numBlocks.z = 1;
+
+        updateBCVelKernel<bottom, velBCs::type[bottom]><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[11]>>>(w_dev, wCoef_dev, pCorr_dev
+        , wNorm_dev, relax_w);
+
+        updateBCVelKernel<top, velBCs::type[top]><<<numBlocks, threadsPerBlock, sizeof(scalar) * blockSize, stream[12]>>>(w_dev, wCoef_dev, pCorr_dev
+        , wNorm_dev, relax_w);
+    }
+
+    for (int i = 0; i < 4*dim+1; ++i) {
         cudaStreamSynchronize(stream[i]);
     }
 
-    for (int i = 0; i < 2*dim+1; ++i) {
+    for (int i = 0; i < 4*dim+1; ++i) {
         cudaStreamDestroy(stream[i]);
     }
 

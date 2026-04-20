@@ -67,7 +67,7 @@ constexpr int numOuterIter = 10000;      // iteration times 迭代次数
 constexpr int nIter_u = 10;
 constexpr int nIter_v = 10;
 constexpr int nIter_w = 10;
-constexpr int nIter_p = 200;
+constexpr int nIter_p = 30;
 
 constexpr scalar relax_u = 0.75;     // 松弛因子
 constexpr scalar relax_v = 0.75;

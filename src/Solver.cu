@@ -160,6 +160,8 @@ void Solver::solve() {
             wfNorm = sqrt(wfNorm / (nx * ny * (nz+1)));
         }
 
+        cout << pNorm << endl;
+
         if (pNorm < outerTol && uNorm < outerTol && vNorm < outerTol && wNorm < outerTol && ufNorm < outerTol && vfNorm < outerTol
             && wfNorm < outerTol) {
             break;

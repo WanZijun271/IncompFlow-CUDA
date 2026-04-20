@@ -31,4 +31,8 @@ constexpr int xDir = 0;
 constexpr int yDir = 1;
 constexpr int zDir = 2;
 
+constexpr int wall   = 0;
+constexpr int inlet  = 1;
+constexpr int outlet = 2;
+
 #endif
