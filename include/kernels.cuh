@@ -250,8 +250,7 @@ __global__ void calcBCMomSrcTermKernel(scalar *srcTerm, scalar *p) {
 }
 
 template<int loc, int bcType>
-__global__ void applyBCsToMomEqKernel(scalar *uCoef, scalar *vCoef, scalar *wCoef, scalar *uSrcTerm, scalar *vSrcTerm
-    , scalar *wSrcTerm, scalar uBC, scalar vBC, scalar wBC) {
+__global__ void applyBCsToMomEqKernel(scalar *uCoef, scalar *vCoef, scalar *wCoef, scalar *uSrcTerm, scalar *vSrcTerm, scalar *wSrcTerm, scalar uBC, scalar vBC, scalar wBC) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;

@@ -5,7 +5,7 @@
 
 constexpr int dim = 2;
 
-constexpr int nx = 256;
+constexpr int nx = 512;
 constexpr int ny = 128;
 constexpr int nz = 1;
 
@@ -18,8 +18,8 @@ constexpr scalar zmax = 1.0;
 
 constexpr scalar thermalConductivity = 0.598;                                                   // thermal conductivity 热导率
 constexpr scalar specificHeatCapacity = 4186.0;                                                   // specific heat capacity 比热容
-constexpr scalar density = 1;                                                                // density 密度 
-constexpr scalar dynamicViscosity = 0.01;
+constexpr scalar density = 998.2;                                                                // density 密度 
+constexpr scalar dynamicViscosity = 1.002e-3;
 constexpr scalar thermalDiffusivity = thermalConductivity / specificHeatCapacity / density;    // thermal diffusivity 热扩散率
 
 struct velBCs{
@@ -34,7 +34,7 @@ struct velBCs{
 
     static constexpr scalar val[6][3] = {
         {0, 0, 0},    // east
-        {1, 0, 0},    // west
+        {0.001, 0, 0},    // west
         {0, 0, 0},    // north 
         {0, 0, 0},    // south
         {0, 0, 0},    // top
@@ -78,8 +78,6 @@ constexpr scalar tol_u = 1e-4;
 constexpr scalar tol_v = 1e-4;
 constexpr scalar tol_w = 1e-4;
 constexpr scalar tol_p = 1e-6;
-constexpr scalar tol_mass = 1e-10;
-
-constexpr scalar outerTol = 1e-6; // tolerance of relative residual
+constexpr scalar tol_mass = 1e-11;
 
 #endif

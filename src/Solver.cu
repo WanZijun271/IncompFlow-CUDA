@@ -174,10 +174,13 @@ void Solver::solve() {
 
         applyBCsToMomEq();
 
-        pointJacobiIterate(_u_dev, fieldSize, _uCoef_dev, _uSrcTerm_dev, nIter_u, relax_u, tol_u);
-        pointJacobiIterate(_v_dev, fieldSize, _vCoef_dev, _vSrcTerm_dev, nIter_v, relax_v, tol_v);
+        // pointJacobiIterate(_u_dev, fieldSize, _uCoef_dev, _uSrcTerm_dev, nIter_u, relax_u, tol_u);
+        GaussSeidelIterate(_u_dev, _uCoef_dev, _uSrcTerm_dev, nIter_u, relax_u, tol_u);
+        // pointJacobiIterate(_v_dev, fieldSize, _vCoef_dev, _vSrcTerm_dev, nIter_v, relax_v, tol_v);
+        GaussSeidelIterate(_v_dev, _vCoef_dev, _vSrcTerm_dev, nIter_v, relax_v, tol_v);
         if constexpr (dim == 3) {
-            pointJacobiIterate(_w_dev, fieldSize, _wCoef_dev, _wSrcTerm_dev, nIter_w, relax_w, tol_w);
+            // pointJacobiIterate(_w_dev, fieldSize, _wCoef_dev, _wSrcTerm_dev, nIter_w, relax_w, tol_w);
+            GaussSeidelIterate(_w_dev, _wCoef_dev, _wSrcTerm_dev, nIter_w, relax_w, tol_w);
         }
 
         RhieChowInterpolate();
@@ -189,7 +192,8 @@ void Solver::solve() {
 
         cudaMemset(_pCorr_dev, 0, fieldSize);
 
-        pointJacobiIterate(_pCorr_dev, fieldSize, _pCorrCoef_dev, _pCorrSrcTerm_dev, nIter_p, relax_p, tol_p);
+        // pointJacobiIterate(_pCorr_dev, fieldSize, _pCorrCoef_dev, _pCorrSrcTerm_dev, nIter_p, relax_p, tol_p);
+        GaussSeidelIterate(_pCorr_dev, _pCorrCoef_dev, _pCorrSrcTerm_dev, nIter_p, relax_p, tol_p);
 
         updateField();
         
@@ -240,41 +244,41 @@ void Solver::solve() {
             wfNormMax = max(pNormMax, pNorm);
         }
 
-        scalar pNormRel = pNorm / pNormMax;
-        scalar uNormRel = uNorm / uNormMax;
-        scalar vNormRel = vNorm / vNormMax;
-        scalar ufNormRel = ufNorm / ufNormMax;
-        scalar vfNormRel = vfNorm / vfNormMax;
-        scalar wNormRel, wfNormRel;
+        scalar pRelNorm = pNorm / pNormMax;
+        scalar uRelNorm = uNorm / uNormMax;
+        scalar vRelNorm = vNorm / vNormMax;
+        scalar ufRelNorm = ufNorm / ufNormMax;
+        scalar vfRelNorm = vfNorm / vfNormMax;
+        scalar wRelNorm, wfRelNorm;
         if constexpr (dim == 3) {
-            wNormRel = wNorm / wNormMax;
-            wfNormRel = wfNorm / wfNormMax;
+            wRelNorm = wNorm / wNormMax;
+            wfRelNorm = wfNorm / wfNormMax;
         }
 
         bool isConverged = true;
-        isConverged = isConverged && (pNormRel < tol_p);
-        isConverged = isConverged && (uNormRel < tol_u);
-        isConverged = isConverged && (vNormRel < tol_v);
-        isConverged = isConverged && (ufNormRel < tol_u);
-        isConverged = isConverged && (vfNormRel < tol_v);
+        isConverged = isConverged && (pRelNorm < tol_p);
+        isConverged = isConverged && (uRelNorm < tol_u);
+        isConverged = isConverged && (vRelNorm < tol_v);
+        isConverged = isConverged && (ufRelNorm < tol_u);
+        isConverged = isConverged && (vfRelNorm < tol_v);
         if constexpr (dim == 3) {
-            isConverged = isConverged && (wNormRel < tol_w);
-            isConverged = isConverged && (wfNormRel < tol_w);
+            isConverged = isConverged && (wRelNorm < tol_w);
+            isConverged = isConverged && (wfRelNorm < tol_w);
         }
         isConverged = isConverged || (massNorm < tol_mass);
 
-        if (it == 0 || it % 100 == 0 || isConverged || it == numOuterIter - 1) {
-            printf("iter: %d\n", it);
-            printf("pNormRel : %.3E\n", pNormRel);
-            printf("uNormRel : %.3E\n", uNormRel);
-            printf("vNormRel : %.3E\n", vNormRel);
+        if (it == 0 || (it+1) % 1000 == 0 || isConverged || it == numOuterIter - 1) {
+            printf("iter: %d\n", it+1);
+            printf("pRelNorm : %.3E\n", pRelNorm);
+            printf("uRelNorm : %.3E\n", uRelNorm);
+            printf("vRelNorm : %.3E\n", vRelNorm);
             if constexpr (dim == 3) {
-                printf("wNormRel : %.3E\n", wNormRel);
+                printf("wRelNorm : %.3E\n", wRelNorm);
             }
-            printf("ufNormRel: %.3E\n", ufNormRel);
-            printf("vfNormRel: %.3E\n", vfNormRel);
+            printf("ufRelNorm: %.3E\n", ufRelNorm);
+            printf("vfRelNorm: %.3E\n", vfRelNorm);
             if constexpr (dim == 3) {
-                printf("wfNormRel: %.3E\n", wfNormRel);
+                printf("wfRelNorm: %.3E\n", wfRelNorm);
             }
             printf("massNorm : %.3E\n", massNorm);
             printf("------------------------------------------------------------\n");
@@ -861,8 +865,7 @@ void Solver::updateField() {
 
 }
 
-void Solver::pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, scalar *srcTerm_dev, int nIter, scalar relax
-    , scalar tol) {
+void Solver::pointJacobiIterate(scalar *field_dev, size_t fieldSize, scalar *coef_dev, scalar *srcTerm_dev, int nIter, scalar relax, scalar tol) {
 
     scalar *field0_dev, *norm_dev;
     cudaMalloc(&field0_dev, fieldSize);

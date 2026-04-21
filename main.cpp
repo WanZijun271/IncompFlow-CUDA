@@ -7,7 +7,7 @@ int main() {
 
     Solver solver{0, 0, 0, 0, 0};
     solver.solve();
-    solver.writeVTK("test.vtk");
+    solver.writeVTK("test1.vtk");
 
     auto end = std::chrono::high_resolution_clock::now();
 
