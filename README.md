@@ -17,7 +17,7 @@
 | 对流项 | 一阶迎风格式 |
 | 扩散项 | 中心差分（二阶精度） |
 | 压力‑速度耦合 | **SIMPLE** 算法 + Rhie & Chow 动量插值 |
-| 线性求解器（GPU） | Point Jacobi / Gauss‑Seidel |
+| 线性求解器 | Point Jacobi / Gauss‑Seidel |
 | 硬件加速 | 全 CUDA 内核（网格循环、系数组装、求解） |
 
 ---
